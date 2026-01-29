@@ -9,7 +9,7 @@ st.set_page_config(page_title="Mi Conciliador Pro", layout="wide")
 PATH_BANCO = "data/base_cc_santander.csv"
 PATH_CAT = "data/categorias.csv"
 
-# --- FUNCIONES DE APOYO (LAS QUE FALTABAN) ---
+# --- FUNCIONES DE APOYO ---
 def cargar_datos():
     if os.path.exists(PATH_BANCO):
         return pd.read_csv(PATH_BANCO)
@@ -20,32 +20,53 @@ def cargar_categorias():
         return pd.read_csv(PATH_CAT)['categoria'].tolist()
     return ["Alimentación", "Transporte", "Vivienda", "Ocio", "Suscripciones", "Pendiente"]
 
-# --- FUNCIÓN DE PROCESAMIENTO SANTANDER ---
-def validar_y_procesar_santander(archivo):
-    df_meta = pd.read_excel(archivo, nrows=5, header=None)
-    texto_cabecera = ""
-    for col in df_meta.columns:
-        texto_cabecera += " ".join(df_meta[col].astype(str))
-    
-    CUENTA_PROPIA = "0-000-74-80946-4"
-    
-    if CUENTA_PROPIA in texto_cabecera:
-        st.success(f"✅ Archivo Validado: Cuenta Santander {CUENTA_PROPIA}")
-        df = pd.read_excel(archivo, skiprows=3)
-        df.columns = df.columns.str.strip()
+def procesar_archivo(archivo):
+    """Detecta el tipo de archivo y lo procesa automáticamente"""
+    try:
+        # 1. Intento de lectura Santander (.xlsx)
+        if archivo.name.endswith('.xlsx'):
+            df_meta = pd.read_excel(archivo, nrows=5, header=None)
+            texto_completo = df_meta.astype(str).values.flatten()
+            texto_completo = " ".join(texto_completo)
+            
+            CUENTA_PROPIA = "0-000-74-80946-4"
+            
+            if CUENTA_PROPIA in texto_completo:
+                # Usamos header=0 y buscamos la fila donde están los títulos reales
+                df = pd.read_excel(archivo, skiprows=2) 
+                df.columns = df.columns.str.strip() # Limpieza de espacios
+                
+                # Buscamos columnas por nombre parcial para evitar el KeyError
+                col_cargo = [c for c in df.columns if 'Monto cargo' in c][0]
+                col_abono = [c for c in df.columns if 'Monto abono' in c][0]
+                col_fecha = [c for c in df.columns if 'Fecha' in c][0]
+                col_detalle = [c for c in df.columns if 'Detalle' in c][0]
+                
+                df['Monto'] = pd.to_numeric(df[col_abono], errors='coerce').fillna(0) - \
+                              pd.to_numeric(df[col_cargo], errors='coerce').fillna(0)
+                
+                df_final = df[[col_fecha, col_detalle, 'Monto']].copy()
+                df_final.columns = ['Fecha', 'Detalle', 'Monto']
+                df_final['Banco'] = 'CC Santander'
+                df_final['Categoria'] = 'Pendiente'
+                st.success(f"✅ Santander detectado: Cuenta {CUENTA_PROPIA}")
+                return df_final
+            
+        # 2. Intento de lectura Genérico (.csv)
+        elif archivo.name.endswith('.csv'):
+            df = pd.read_csv(archivo, sep=None, engine='python')
+            df.columns = df.columns.str.strip()
+            columnas_req = {'Fecha', 'Detalle', 'Monto'}
+            if columnas_req.issubset(df.columns):
+                df['Banco'] = 'Genérico'
+                df['Categoria'] = 'Pendiente'
+                st.success("✅ Archivo CSV estándar detectado")
+                return df[list(columnas_req) + ['Banco', 'Categoria']]
         
-        # Convertir a número por si acaso vienen como texto con puntos
-        df['Monto cargo ($)'] = pd.to_numeric(df['Monto cargo ($)'], errors='coerce').fillna(0)
-        df['Monto abono ($)'] = pd.to_numeric(df['Monto abono ($)'], errors='coerce').fillna(0)
-        
-        df['Monto'] = df['Monto abono ($)'] - df['Monto cargo ($)']
-        
-        df_final = df[['Fecha', 'Detalle', 'Monto']].copy()
-        df_final['Banco'] = 'CC Santander'
-        df_final['Categoria'] = 'Pendiente'
-        return df_final
-    else:
-        st.error(f"❌ El archivo no corresponde a la cuenta {CUENTA_PROPIA}")
+        st.error("❌ Formato no reconocido o cuenta no autorizada.")
+        return None
+    except Exception as e:
+        st.error(f"❌ Error al procesar: {str(e)}")
         return None
 
 # --- INTERFAZ ---
@@ -55,27 +76,24 @@ tab1, tab2 = st.tabs(["📥 Cargar Cartola", "📊 Conciliación y Categorías"]
 
 with tab1:
     st.header("Carga de Datos")
-    banco_sel = st.selectbox("Formato de Cartola", ["Seleccione...", "Santander (.xlsx)"])
-    archivo = st.file_uploader("Subir archivo bancario", type=["xlsx", "csv"])
+    archivo = st.file_uploader("Arrastra tu cartola aquí (.xlsx o .csv)", type=["xlsx", "csv"])
     
-    if archivo and banco_sel != "Seleccione...":
-        if banco_sel == "Santander (.xlsx)":
-            df_nuevo = validar_y_procesar_santander(archivo)
+    if archivo:
+        df_nuevo = procesar_archivo(archivo)
+        
+        if df_nuevo is not None:
+            st.write("### Vista previa de carga:")
+            st.dataframe(df_nuevo.head())
             
-            if df_nuevo is not None:
-                st.write("### Vista previa de los datos a cargar:")
-                st.dataframe(df_nuevo.head())
-                
-                if st.button("Confirmar e Insertar en Base de Datos"):
-                    df_hist = cargar_datos()
-                    # Unión y eliminación de duplicados
-                    df_final = pd.concat([df_hist, df_nuevo]).drop_duplicates(
-                        subset=['Fecha', 'Detalle', 'Monto'], 
-                        keep='first'
-                    )
-                    df_final.to_csv(PATH_BANCO, index=False)
-                    st.balloons()
-                    st.success("¡Datos sincronizados exitosamente!")
+            if st.button("Confirmar e Insertar en Base de Datos"):
+                df_hist = cargar_datos()
+                # Unimos y eliminamos duplicados exactos
+                df_unificado = pd.concat([df_hist, df_nuevo]).drop_duplicates(
+                    subset=['Fecha', 'Detalle', 'Monto'], keep='first'
+                )
+                df_unificado.to_csv(PATH_BANCO, index=False)
+                st.balloons()
+                st.success(f"Sincronizado: {len(df_nuevo)} registros procesados.")
 
 with tab2:
     st.header("Listado de Movimientos")
@@ -83,23 +101,19 @@ with tab2:
     lista_categorias = cargar_categorias()
     
     if not df_cat.empty:
-        # Editor de datos con eliminación de filas habilitada
         df_editado = st.data_editor(
             df_cat,
             column_config={
-                "Categoria": st.column_config.SelectboxColumn(
-                    "Categoría", 
-                    options=lista_categorias,
-                    required=True
-                )
+                "Categoria": st.column_config.SelectboxColumn("Categoría", options=lista_categorias, required=True),
+                "Monto": st.column_config.NumberColumn(format="$%d")
             },
             num_rows="dynamic",
             hide_index=True,
-            width=1200
+            width=None
         )
         
         if st.button("Guardar Cambios Finales"):
             df_editado.to_csv(PATH_BANCO, index=False)
-            st.success("Base de datos actualizada.")
+            st.success("Cambios guardados.")
     else:
-        st.info("No hay datos cargados aún. Ve a la pestaña 'Cargar Cartola'.")
+        st.info("Bandeja de entrada vacía.")
