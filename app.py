@@ -109,11 +109,11 @@ with tab2:
             },
             num_rows="dynamic",
             hide_index=True,
-            width=None
+            use_container_width=True
         )
         
         if st.button("Guardar Cambios Finales"):
             df_editado.to_csv(PATH_BANCO, index=False)
-            st.success("Cambios guardados.")
+            st.success("Cambios guardados en la base de datos.")
     else:
         st.info("Bandeja de entrada vacía.")
