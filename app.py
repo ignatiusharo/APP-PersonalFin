@@ -37,12 +37,21 @@ with st.sidebar:
 # --- FUNCIONES DE APOYO ---
 def cargar_datos():
     if os.path.exists(PATH_BANCO):
-        return pd.read_csv(PATH_BANCO)
+        try:
+            return pd.read_csv(PATH_BANCO)
+        except pd.errors.EmptyDataError:
+            return pd.DataFrame(columns=['Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria'])
     return pd.DataFrame(columns=['Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria'])
 
 def cargar_categorias():
     if os.path.exists(PATH_CAT):
-        return pd.read_csv(PATH_CAT)['categoria'].tolist()
+        try:
+            df = pd.read_csv(PATH_CAT)
+            # Support both new 'Categoria' and old 'categoria' columns
+            col_name = 'Categoria' if 'Categoria' in df.columns else 'categoria'
+            return df[col_name].dropna().tolist()
+        except Exception:
+            return ["Alimentación", "Transporte", "Vivienda", "Ocio", "Suscripciones", "Pendiente"]
     return ["Alimentación", "Transporte", "Vivienda", "Ocio", "Suscripciones", "Pendiente"]
 
 def procesar_archivo(archivo):
