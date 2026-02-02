@@ -30,18 +30,9 @@ with st.sidebar:
                 else:
                     st.warning(f"Info: {msg1}")
         
-        if st.button("⬆️ Subir Todo (Local -> Dropbox)"):
-            with st.spinner("Subiendo archivos a Dropbox..."):
-                ok1, msg1 = dbx.upload_file(PATH_BANCO, "/base_cc_santander.csv")
-                ok2, msg2 = dbx.upload_file(PATH_CAT, "/categorias.csv")
-                if ok1 and ok2:
-                    st.cache_data.clear() # Force reload of cached data
-                    st.success("✅ Archivos subidos y actualizados en la nube (Recargando...)")
-                    import time
-                    time.sleep(1)
-                    st.rerun()
                 else:
-                    st.error(f"Error al subir: {msg1} | {msg2}")
+                    st.warning(f"Info: {msg1}")
+
     else:
         st.error("⚠️ Token no configurado")
 
@@ -134,7 +125,7 @@ def highlight_duplicates(df):
 # --- INTERFAZ ---
 st.title("💰 Conciliador Bancario Inteligente")
 
-tab1, tab2 = st.tabs(["📥 Cargar Cartola", "📊 Conciliación y Categorías"])
+tab1, tab2, tab3 = st.tabs(["📥 Cargar Cartola", "📊 Conciliación y Categorías", "⚙️ Configuración"])
 
 with tab1:
     st.header("Carga de Datos")
@@ -278,3 +269,38 @@ with tab2:
                     else: st.error(f"Error respaldo: {msg}")
     else:
         st.info("Bandeja de entrada vacía.")
+
+with tab3:
+    st.header("⚙️ Gestión de Categorías")
+    st.write("Aquí puedes agregar, editar o eliminar las categorías disponibles.")
+    
+    # Load raw categories file for editing
+    if os.path.exists(PATH_CAT):
+        df_config_cat = pd.read_csv(PATH_CAT)
+    else:
+        df_config_cat = pd.DataFrame(columns=['Categoria', 'Tipo'])
+    
+    # Editable DataFrame
+    df_cat_edited = st.data_editor(
+        df_config_cat,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="editor_categorias"
+    )
+    
+    if st.button("Guardar Cambios en Categorías"):
+        # Save locally
+        df_cat_edited.to_csv(PATH_CAT, index=False)
+        st.success("✅ Categorías actualizadas localmente")
+        
+        # Sync to Dropbox
+        if dbx:
+            ok, msg = dbx.upload_file(PATH_CAT, "/categorias.csv")
+            if ok: st.toast("☁️ Categorías sincronizadas con Dropbox", icon="☁️")
+            else: st.error(f"Error al sincronizar categorías: {msg}")
+        
+        # Clear cache to reflect changes immediately in other tabs
+        st.cache_data.clear()
+        import time
+        time.sleep(1)
+        st.rerun()
