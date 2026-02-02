@@ -44,14 +44,15 @@ def cargar_datos():
             return pd.read_csv(PATH_BANCO)
         except pd.errors.EmptyDataError:
             return pd.DataFrame(columns=['Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria'])
-        except pd.errors.ParserError:
-             return pd.DataFrame(columns=['Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria'])
+        except (pd.errors.EmptyDataError, pd.errors.ParserError):
+            return pd.DataFrame(columns=['Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria'])
     return pd.DataFrame(columns=['Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria'])
 
 def cargar_categorias():
     if os.path.exists(PATH_CAT):
         try:
-            df = pd.read_csv(PATH_CAT)
+            # Use python engine for more robust parsing
+            df = pd.read_csv(PATH_CAT, engine='python', sep=',', on_bad_lines='skip')
             # Support both new 'Categoria' and old 'categoria' columns
             col_name = 'Categoria' if 'Categoria' in df.columns else 'categoria'
             return df[col_name].dropna().tolist()
@@ -278,9 +279,9 @@ with tab3:
     # Load raw categories file for editing
     if os.path.exists(PATH_CAT):
         try:
-            df_config_cat = pd.read_csv(PATH_CAT)
-        except pd.errors.ParserError:
-            st.error("⚠️ Error leyendo archivo de categorías (formato corrupto). Se ha cargado una lista vacía.")
+            df_config_cat = pd.read_csv(PATH_CAT, engine='python', sep=',', on_bad_lines='skip')
+        except Exception as e:
+            st.error(f"⚠️ Error leyendo archivo de categorías: {e}")
             df_config_cat = pd.DataFrame(columns=['Categoria', 'Tipo'])
     else:
         df_config_cat = pd.DataFrame(columns=['Categoria', 'Tipo'])
