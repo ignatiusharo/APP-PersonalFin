@@ -30,8 +30,7 @@ with st.sidebar:
                 else:
                     st.warning(f"Info: {msg1}")
         
-                else:
-                    st.warning(f"Info: {msg1}")
+
 
     else:
         st.error("⚠️ Token no configurado")
