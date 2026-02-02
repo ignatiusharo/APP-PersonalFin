@@ -201,12 +201,15 @@ with tab2:
         if df_display['Duplicado'].any():
             st.warning("⚠️ Se han detectado movimientos duplicados (marcados en rojo si es posible).")
 
+        # Prepare dataframe for editor: remove 'Duplicado' column from the visual editor
+        # but keep it in logic
+        df_editor_input = df_display.drop(columns=['Duplicado'])
+
         df_editado = st.data_editor(
-            df_display,
+            df_editor_input,
             column_config={
                 "Categoria": st.column_config.SelectboxColumn("Categoría", options=lista_categorias, required=True),
-                "Monto": st.column_config.NumberColumn(format="$%d"),
-                "Duplicado": st.column_config.Column("Duplicado", disabled=True, hidden=True) # Hide the technical column
+                "Monto": st.column_config.NumberColumn(format="$%d")
             },
             num_rows="dynamic",
             hide_index=True,
