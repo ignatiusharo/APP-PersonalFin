@@ -35,7 +35,11 @@ with st.sidebar:
                 ok1, msg1 = dbx.upload_file(PATH_BANCO, "/base_cc_santander.csv")
                 ok2, msg2 = dbx.upload_file(PATH_CAT, "/categorias.csv")
                 if ok1 and ok2:
-                    st.success("✅ Archivos subidos y actualizados en la nube")
+                    st.cache_data.clear() # Force reload of cached data
+                    st.success("✅ Archivos subidos y actualizados en la nube (Recargando...)")
+                    import time
+                    time.sleep(1)
+                    st.rerun()
                 else:
                     st.error(f"Error al subir: {msg1} | {msg2}")
     else:
@@ -195,14 +199,14 @@ with tab2:
         df_display['Duplicado'] = df_display.duplicated(subset=['Fecha', 'Detalle', 'Monto'], keep=False)
         
         if df_display['Duplicado'].any():
-            st.warning("⚠️ Se han detectado movimientos duplicados (marcados en la columna 'Duplicado').")
+            st.warning("⚠️ Se han detectado movimientos duplicados (marcados en rojo si es posible).")
 
         df_editado = st.data_editor(
             df_display,
             column_config={
                 "Categoria": st.column_config.SelectboxColumn("Categoría", options=lista_categorias, required=True),
                 "Monto": st.column_config.NumberColumn(format="$%d"),
-                "Duplicado": st.column_config.CheckboxColumn("¿Posible Duplicado?", disabled=True)
+                "Duplicado": st.column_config.Column("Duplicado", disabled=True, hidden=True) # Hide the technical column
             },
             num_rows="dynamic",
             hide_index=True,
