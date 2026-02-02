@@ -1,9 +1,32 @@
 import streamlit as st
 import pandas as pd
 import os
+from utils.dropbox_client import DropboxManager
 
 # Configuración de página
 st.set_page_config(page_title="Mi Conciliador Pro", layout="wide")
+
+# --- DROPBOX CONFIG ---
+if 'dropbox' in st.secrets:
+    dbx = DropboxManager(st.secrets['dropbox']['access_token'])
+else:
+    dbx = None
+
+# Sidebar Sync
+with st.sidebar:
+    st.header("☁️ Respaldo Cloud")
+    if dbx:
+        if st.button("🔄 Sincronizar (Descargar)"):
+            with st.spinner("Descargando de Dropbox..."):
+                ok1, msg1 = dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
+                ok2, msg2 = dbx.download_file("/categorias.csv", PATH_CAT)
+                if ok1 or ok2:
+                    st.success("✅ Descarga completada")
+                    st.rerun()
+                else:
+                    st.warning(f"Info: {msg1}")
+    else:
+        st.error("⚠️ Token no configurado")
 
 # Rutas de archivos
 PATH_BANCO = "data/base_cc_santander.csv"
@@ -94,6 +117,12 @@ with tab1:
                 df_unificado.to_csv(PATH_BANCO, index=False)
                 st.balloons()
                 st.success(f"Sincronizado: {len(df_nuevo)} registros procesados.")
+                
+                # Auto Backup
+                if dbx:
+                    ok, msg = dbx.upload_file(PATH_BANCO, "/base_cc_santander.csv")
+                    if ok: st.toast("☁️ Respaldo en Dropbox actualizado")
+                    else: st.error(f"Error respaldo: {msg}")
 
 with tab2:
     st.header("Listado de Movimientos")
@@ -115,5 +144,11 @@ with tab2:
         if st.button("Guardar Cambios Finales"):
             df_editado.to_csv(PATH_BANCO, index=False)
             st.success("Cambios guardados en la base de datos.")
+            
+            # Auto Backup
+            if dbx:
+                ok, msg = dbx.upload_file(PATH_BANCO, "/base_cc_santander.csv")
+                if ok: st.toast("☁️ Respaldo en Dropbox actualizado", icon="☁️")
+                else: st.error(f"Error respaldo: {msg}")
     else:
         st.info("Bandeja de entrada vacía.")

@@ -1,0 +1,54 @@
+import dropbox
+import dropbox.files
+import dropbox.exceptions
+import os
+
+class DropboxManager:
+    def __init__(self, access_token):
+        self.dbx = dropbox.Dropbox(access_token)
+    
+    def check_connection(self):
+        try:
+            self.dbx.users_get_current_account()
+            return True
+        except Exception as e:
+            print(f"Error connecting to Dropbox: {e}")
+            return False
+
+    def download_file(self, dropbox_path, local_path):
+        """Downloads a file from Dropbox to local path."""
+        try:
+            # Ensure local directory exists
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            
+            # Check if file exists in Dropbox (metadata)
+            try:
+                self.dbx.files_get_metadata(dropbox_path)
+            except dropbox.exceptions.ApiError as e:
+                if e.error.is_path() and e.error.get_path().is_not_found():
+                    return False, "File not found in Dropbox"
+                raise e
+
+            # Download
+            with open(local_path, "wb") as f:
+                metadata, res = self.dbx.files_download(path=dropbox_path)
+                f.write(res.content)
+            return True, f"Downloaded {dropbox_path}"
+        except Exception as e:
+            return False, f"Error downloading: {str(e)}"
+
+    def upload_file(self, local_path, dropbox_path):
+        """Uploads a local file to Dropbox, overwriting if exists."""
+        try:
+            if not os.path.exists(local_path):
+                return False, "Local file does not exist"
+
+            with open(local_path, "rb") as f:
+                self.dbx.files_upload(
+                    f.read(),
+                    dropbox_path,
+                    mode=dropbox.files.WriteMode.overwrite
+                )
+            return True, f"Uploaded {dropbox_path}"
+        except Exception as e:
+            return False, f"Error uploading: {str(e)}"
