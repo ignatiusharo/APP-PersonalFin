@@ -6,6 +6,10 @@ from utils.dropbox_client import DropboxManager
 # Configuración de página
 st.set_page_config(page_title="Mi Conciliador Pro", layout="wide")
 
+# Rutas de archivos
+PATH_BANCO = "data/base_cc_santander.csv"
+PATH_CAT = "data/categorias.csv"
+
 # --- DROPBOX CONFIG ---
 if 'dropbox' in st.secrets:
     dbx = DropboxManager(st.secrets['dropbox']['access_token'])
@@ -28,9 +32,7 @@ with st.sidebar:
     else:
         st.error("⚠️ Token no configurado")
 
-# Rutas de archivos
-PATH_BANCO = "data/base_cc_santander.csv"
-PATH_CAT = "data/categorias.csv"
+
 
 # --- FUNCIONES DE APOYO ---
 def cargar_datos():
