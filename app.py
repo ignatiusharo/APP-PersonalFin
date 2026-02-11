@@ -223,7 +223,7 @@ with tab_home:
             st.divider()
             
             # Gráfico y Tabla de Gastos por Categoría + Presupuesto
-            col_graf, col_tabla = st.columns([2, 1])
+            col_graf, col_tabla = st.columns([1.2, 1])
             
             # Preparar datos agrupados (Solo Gastos)
             df_gastos = df_mes[df_mes['Monto'] < 0].copy()
@@ -304,27 +304,73 @@ with tab_budget:
     cols_meses = [c for c in df_budget.columns if c != "Categoria"]
     anios_disponibles = sorted(list(set([c.split('-')[0] for c in cols_meses])), reverse=True)
     
-    anio_sel = st.selectbox("📅 Filtrar por Año", anios_disponibles)
+    anio_actual_str = str(datetime.now().year)
+    default_index = anios_disponibles.index(anio_actual_str) if anio_actual_str in anios_disponibles else 0
+    anio_sel = st.selectbox("📅 Filtrar por Año", anios_disponibles, index=default_index)
     
+    # Obtener Tipos de Categoría para Cálculos de Saldo
+    if os.path.exists(PATH_CAT):
+        df_cat_map = pd.read_csv(PATH_CAT, engine='python')
+        tipo_map = dict(zip(df_cat_map['Categoria'], df_cat_map['Tipo']))
+    else:
+        tipo_map = {}
+
     # Filtrar columnas del DF para mostrar solo el año seleccionado + Categoria
     cols_to_show = ["Categoria"] + [c for c in cols_meses if c.startswith(str(anio_sel))]
     df_budget_display = df_budget[cols_to_show].copy()
     
+    # --- CÁLCULO DE SALDOS PARA VISUALIZACIÓN ---
+    # Identificar categorías de Ingreso vs Gasto
+    cats_ingreso = [c for c in df_budget_display['Categoria'] if tipo_map.get(c) == 'Ingresos']
+    cats_gasto = [c for c in df_budget_display['Categoria'] if c not in cats_ingreso]
+    
+    # Calcular Saldo Mensual
+    saldos = {}
+    for cl in cols_to_show[1:]: # Meses
+        ing = df_budget_display[df_budget_display['Categoria'].isin(cats_ingreso)][cl].sum()
+        gas = df_budget_display[df_budget_display['Categoria'].isin(cats_gasto)][cl].sum()
+        saldos[cl] = ing - gas
+    
+    # Calcular Saldo Acumulado (necesitamos todos los meses previos, no solo los del año visible)
+    # Para simplificar, acumulamos desde el inicio del DF cargado
+    saldo_acum = {}
+    acumulado = 0
+    # Obtenemos TODOS los meses en orden cronológico
+    todos_meses = sorted([c for c in df_budget.columns if c != "Categoria"])
+    for m in todos_meses:
+        ing_m = df_budget[df_budget['Categoria'].isin(cats_ingreso)][m].sum()
+        gas_m = df_budget[df_budget['Categoria'].isin(cats_gasto)][m].sum()
+        acumulado += (ing_m - gas_m)
+        if m in cols_to_show:
+            saldo_acum[m] = acumulado
+
+    # Añadir filas al display (solo visual)
+    fila_saldo = {"Categoria": "📊 SALDO MES"}
+    fila_acum = {"Categoria": "📈 SALDO ACUMULADO"}
+    fila_saldo.update(saldos)
+    fila_acum.update(saldo_acum)
+    
+    df_budget_visual = pd.concat([df_budget_display, pd.DataFrame([fila_saldo, fila_acum])], ignore_index=True)
+
     # Editor
     df_budget_edited = st.data_editor(
-        df_budget_display,
+        df_budget_visual,
         num_rows="dynamic",
         use_container_width=True,
         key=f"budget_editor_{anio_sel}", # Key dinámica para resetear si cambia el año
         column_config={
             "Categoria": st.column_config.TextColumn("Categoría", disabled=True),
-            **{mes: st.column_config.NumberColumn(mes, format="$,.0f") for mes in cols_to_show if mes != "Categoria"}
-        }
+            **{mes: st.column_config.NumberColumn(mes, format="$%d") for mes in cols_to_show if mes != "Categoria"}
+        },
+        disabled=["Categoria"] # Bloquear edición de nombres de fila (incluyendo Saldo)
     )
     
     if st.button("💾 Guardar Presupuesto"):
+        # Filtrar el DF editado para quitar las filas de Saldo antes de guardar
+        df_to_save = df_budget_edited[~df_budget_edited['Categoria'].isin(["📊 SALDO MES", "📈 SALDO ACUMULADO"])]
+        
         # Actualizar el DF original con los cambios del año seleccionado
-        df_budget.update(df_budget_edited)
+        df_budget.update(df_to_save)
         
         df_budget.to_csv(PATH_PRESUPUESTO, index=False)
         st.success("✅ Presupuesto actualizado localmente")
