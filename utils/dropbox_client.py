@@ -4,8 +4,17 @@ import dropbox.exceptions
 import os
 
 class DropboxManager:
-    def __init__(self, access_token):
-        self.dbx = dropbox.Dropbox(access_token)
+    def __init__(self, access_token=None, refresh_token=None, app_key=None, app_secret=None):
+        if refresh_token and app_key and app_secret:
+            # Using refresh token flow for persistent access
+            self.dbx = dropbox.Dropbox(
+                oauth2_refresh_token=refresh_token,
+                app_key=app_key,
+                app_secret=app_secret
+            )
+        else:
+            # Fallback to simple access token
+            self.dbx = dropbox.Dropbox(access_token)
     
     def check_connection(self):
         try:

@@ -11,31 +11,35 @@ PATH_BANCO = "data/base_cc_santander.csv"
 PATH_CAT = "data/categorias.csv"
 
 # --- DROPBOX CONFIG ---
+# --- DROPBOX CONFIG ---
 if 'dropbox' in st.secrets:
-    dbx = DropboxManager(st.secrets['dropbox']['access_token'])
+    db_config = st.secrets['dropbox']
+    # Priorizar flujo de refresh_token si están disponibles las llaves
+    if all(k in db_config for k in ['refresh_token', 'app_key', 'app_secret']):
+        dbx = DropboxManager(
+            refresh_token=db_config['refresh_token'],
+            app_key=db_config['app_key'],
+            app_secret=db_config['app_secret']
+        )
+    else:
+        dbx = DropboxManager(access_token=db_config.get('access_token'))
 else:
     dbx = None
 
-# Sidebar Sync
+# Sidebar Info (Simplified)
 with st.sidebar:
-    st.header("☁️ Respaldo Cloud")
+    st.header("☁️ Estado Cloud")
     if dbx:
-        if st.button("🔄 Sincronizar (Descargar)"):
-            with st.spinner("Descargando de Dropbox..."):
-                ok1, msg1 = dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
-                ok2, msg2 = dbx.download_file("/categorias.csv", PATH_CAT)
+        st.success("Conectado a Dropbox")
+        if st.button("🔄 Forzar Descarga"):
+            with st.spinner("Sincronizando..."):
+                ok1, _ = dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
+                ok2, _ = dbx.download_file("/categorias.csv", PATH_CAT)
                 if ok1 or ok2:
-                    st.success("✅ Descarga completada")
+                    st.toast("✅ Base de datos actualizada", icon="🔄")
                     st.rerun()
-                else:
-                    st.warning(f"Info: {msg1}")
-        
-
-
     else:
         st.error("⚠️ Token no configurado")
-
-
 
 # --- FUNCIONES DE APOYO ---
 def cargar_datos():
@@ -164,117 +168,81 @@ with tab1:
 
 with tab2:
     st.header("Listado de Movimientos")
+    
+    # --- AUTO SYNC ---
+    if dbx and "last_sync" not in st.session_state:
+        with st.status("Sincronizando con la nube...", expanded=False) as status:
+            ok1, _ = dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
+            ok2, _ = dbx.download_file("/categorias.csv", PATH_CAT)
+            st.session_state["last_sync"] = True
+            status.update(label="Sincronización completada", state="complete", expanded=False)
+            st.rerun()
+
     df_cat = cargar_datos()
     lista_categorias = cargar_categorias()
     
     if not df_cat.empty:
+        # Asegurar formato de fecha para filtrado
+        df_cat_proc = df_cat.copy()
+        df_cat_proc['Fecha_dt'] = pd.to_datetime(df_cat_proc['Fecha'], dayfirst=True, errors='coerce')
+        
         # Filtros
-        col1, col2 = st.columns([1, 4])
+        col1, col2 = st.columns([1, 1])
         with col1:
-            ver_pendientes = st.toggle("Ver solo Pendientes", value=False)
+            ver_pendientes = st.toggle("🔍 Solo Pendientes", value=True)
+        with col2:
+            # Filtro por Mes
+            df_cat_proc['Mes'] = df_cat_proc['Fecha_dt'].dt.strftime('%Y-%m')
+            meses_disponibles = sorted(df_cat_proc['Mes'].dropna().unique().tolist(), reverse=True)
+            mes_filtrado = st.selectbox("📅 Filtrar por Mes", ["Todos"] + meses_disponibles)
         
+        # Aplicar filtros al dataframe que se mostrará
+        df_display = df_cat_proc.copy()
         if ver_pendientes:
-            df_display = df_cat[df_cat['Categoria'] == 'Pendiente'].copy()
-        else:
-            df_display = df_cat.copy()
+            df_display = df_display[df_display['Categoria'] == 'Pendiente']
+        if mes_filtrado != "Todos":
+            df_display = df_display[df_display['Mes'] == mes_filtrado]
 
-        # Identificar duplicados para visualización (Opcional: Columna de alerta)
-        # st.dataframe usage for editing doesn't support complex row styling easily natively in `data_editor` 
-        # as of recent versions without locking it. 
-        # BUT we can use `st.data_editor` normally and maybe show warnings?
-        # Re-reading request: "resaltaran ... cuando se revisa"
-        
-        # Let's try to highlight in the editor? 
-        # Streamlit data_editor DOES NOT support row styling (background colors) yet for editable dataframes easily.
-        # It only supports `column_config`.
-        # Workaround: Add a "⚠️" column for duplicates or render a static styled dataframe below if duplicates exist?
-        # Or, just use st.dataframe (read-only) for review and st.data_editor for action.
-        # Given the flow, let's keep data_editor. We can't easily highlight rows IN the editor.
-        # Alternative: Filter duplicates?
-        
-        # Let's proceed with just the Filter for now, and maybe a warning text.
-        
-        # ACTUALLY, checking for consecutive duplicates:
+        # Identificar duplicados visualmente
         df_display['Duplicado'] = df_display.duplicated(subset=['Fecha', 'Detalle', 'Monto'], keep=False)
         
         if df_display['Duplicado'].any():
-            st.warning("⚠️ Se han detectado movimientos duplicados (marcados en rojo si es posible).")
+            st.warning("⚠️ Se han detectado posibles movimientos duplicados en esta vista.")
 
-        # Prepare dataframe for editor: remove 'Duplicado' column from the visual editor
-        # but keep it in logic
-        df_editor_input = df_display.drop(columns=['Duplicado'])
-
+        # Editor de datos - El índice se mantiene para poder actualizar el original
+        # Removemos columnas técnicas del editor
+        df_editor_input = df_display.drop(columns=['Duplicado', 'Mes', 'Fecha_dt'])
+        
         df_editado = st.data_editor(
             df_editor_input,
             column_config={
                 "Categoria": st.column_config.SelectboxColumn("Categoría", options=lista_categorias, required=True),
-                "Monto": st.column_config.NumberColumn(format="$%d")
+                "Monto": st.column_config.NumberColumn(format="$%d"),
+                "Fecha": st.column_config.TextColumn("Fecha") # Mantenemos texto para evitar líos de formato al guardar
             },
             num_rows="dynamic",
-            hide_index=True,
-            use_container_width=True
+            hide_index=False, # Importante: el índice nos permite mapear de vuelta a df_cat
+            use_container_width=True,
+            key="conciliacion_editor"
         )
         
-        if st.button("Guardar Cambios Finales"):
-             # Save back to FULL dataframe (handling the filtered view)
-             # We need to map changes from df_editado back to df_cat
-             # Simplest way: If we filtered, we might have issues merging back.
-             # Better approach for simpler app: Just reload and save? 
-             # No, `df_editado` IS the dataframe.
-             
-             if ver_pendientes:
-                 # Update only the modified rows in the original dataframe
-                 # This is tricky with pandas without a unique ID.
-                 # Let's assume for this scale, we overwrite the rows that match?
-                 # Too risky. 
-                 
-                 # Alternative: When saving, we just save `df_editado` IF it wasn't filtered.
-                 # If it WAS filtered, we need to merge.
-                 
-                 # Let's construct a key?
-                 # Creating a temporary index might be best.
-                 pass
-                 # For now, let's DISABLE saving if filtered, or warn user? 
-                 # Or better: Just re-combine.
-                 
-                 # STRATEGY: 
-                 # 1. Iterate over df_editado and update df_cat where indices match?
-                 # Streamlit resets index?
-                 # Let's rely on the user workflow: Filter -> Edit -> Save.
-                 # Actually, `data_editor` returns the modified dataframe.
-                 # If we passed a subset, we get the modified subset.
-                 # We need to merge `df_editado` (subset) back into `df_cat` (full).
-                 
-                 # Update logic:
-                 # df_cat.update(df_editado) only works if indices align.
-                 # We need to preserve indices.
-                 pass
-
-             # To make it robust:
-             # Let's assume we overwrite the whole DB if not filtered.
-             # If filtered, we must merge.
-             
-             if ver_pendientes:
-                 # We need to match rows. Since we don't have ID, this is hard.
-                 # Let's instruct user to Uncheck filter to Save? Or implement smart merge.
-                 # Smart merge: 
-                 # df_cat.loc[df_editado.index] = df_editado
-                 pass
-             
-             # RE-IMPLEMENTING with Index handling
-             # We need to keep the original index in df_display so we can update df_cat.
-             
-             st.error("⚠️ Para guardar cambios, por favor desactiva el filtro 'Ver solo Pendientes' primero para asegurar la integridad de los datos.")
-        else:
-             if not ver_pendientes:
-                df_editado.drop(columns=['Duplicado'], errors='ignore').to_csv(PATH_BANCO, index=False)
-                st.success("Cambios guardados en la base de datos.")
+        if st.button("💾 Guardar Cambios Finales", type="primary"):
+            # Actualizamos el dataframe original con los cambios del editor basándonos en el índice
+            df_cat.update(df_editado)
             
-                # Auto Backup
-                if dbx:
+            # Guardamos localmente
+            df_cat.to_csv(PATH_BANCO, index=False)
+            st.success("✅ Cambios guardados localmente.")
+            
+            # Auto Backup - Upload a Dropbox
+            if dbx:
+                with st.spinner("Subiendo respaldo a Dropbox..."):
                     ok, msg = dbx.upload_file(PATH_BANCO, "/base_cc_santander.csv")
                     if ok: st.toast("☁️ Respaldo en Dropbox actualizado", icon="☁️")
                     else: st.error(f"Error respaldo: {msg}")
+            
+            st.cache_data.clear()
+            st.rerun()
     else:
         st.info("Bandeja de entrada vacía.")
 
