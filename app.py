@@ -157,11 +157,26 @@ with tab2:
     
     # --- AUTO SYNC ---
     if dbx and "last_sync" not in st.session_state:
-        with st.status("Sincronizando con la nube...", expanded=False) as status:
-            ok1, _ = dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
-            ok2, _ = dbx.download_file("/categorias.csv", PATH_CAT)
-            st.session_state["last_sync"] = True
-            status.update(label="Sincronización completada", state="complete", expanded=False)
+        with st.status("🔍 Sincronizando con Dropbox...", expanded=True) as status:
+            ok1, msg1 = dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
+            ok2, msg2 = dbx.download_file("/categorias.csv", PATH_CAT)
+            
+            if ok1 or ok2:
+                st.session_state["last_sync"] = "Success"
+                status.update(label="✅ Sincronización completada", state="complete", expanded=False)
+                st.rerun()
+            else:
+                st.session_state["last_sync"] = f"Error: {msg1} | {msg2}"
+                status.update(label="❌ Error en la sincronización", state="error", expanded=True)
+                st.error(f"No se pudieron descargar los archivos: {msg1}")
+                if st.button("Reintentar Sincronización"):
+                    del st.session_state["last_sync"]
+                    st.rerun()
+
+    if "last_sync" in st.session_state and "Error" in str(st.session_state["last_sync"]):
+         st.warning(f"⚠️ Nota de Sincronización: {st.session_state['last_sync']}")
+         if st.button("🔄 Forzar Reintento"):
+            del st.session_state["last_sync"]
             st.rerun()
 
     df_cat = cargar_datos()
