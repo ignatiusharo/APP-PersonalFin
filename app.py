@@ -271,15 +271,20 @@ with tab_home:
                 else:
                     st.info("No hay datos para mostrar.")
             
+            # Preparar DF para visualización (con puntos forzados)
+            df_display_comparativo = gastos_comparativo.copy()
+            for col in ['Monto_Abs', 'Presupuesto', 'Diferencia']:
+                df_display_comparativo[col] = df_display_comparativo[col].apply(formatear_monto)
+
             with col_tabla:
                 st.subheader("Detalle")
                 if not gastos_comparativo.empty:
                     st.dataframe(
-                        gastos_comparativo[['Categoria', 'Monto_Abs', 'Presupuesto', 'Diferencia']],
+                        df_display_comparativo[['Categoria', 'Monto_Abs', 'Presupuesto', 'Diferencia']],
                         column_config={
-                            "Monto_Abs": st.column_config.NumberColumn("Real", format="$%d"),
-                            "Presupuesto": st.column_config.NumberColumn("Meta", format="$%d"),
-                            "Diferencia": st.column_config.NumberColumn("Dif", format="$%d"),
+                            "Monto_Abs": st.column_config.TextColumn("Real"),
+                            "Presupuesto": st.column_config.TextColumn("Meta"),
+                            "Diferencia": st.column_config.TextColumn("Dif"),
                         },
                         hide_index=True,
                         use_container_width=True
@@ -313,7 +318,7 @@ with tab_budget:
         key=f"budget_editor_{anio_sel}", # Key dinámica para resetear si cambia el año
         column_config={
             "Categoria": st.column_config.TextColumn("Categoría", disabled=True),
-            **{mes: st.column_config.NumberColumn(mes, format="$%d") for mes in cols_to_show if mes != "Categoria"}
+            **{mes: st.column_config.NumberColumn(mes, format="$,.0f") for mes in cols_to_show if mes != "Categoria"}
         }
     )
     
@@ -442,7 +447,7 @@ with tab2:
             df_editor_input,
             column_config={
                 "Categoria": st.column_config.SelectboxColumn("Categoría", options=lista_categorias, required=True),
-                "Monto": st.column_config.NumberColumn(format="$%d"),
+                "Monto": st.column_config.NumberColumn(format="$,.0f"),
                 "Fecha": st.column_config.TextColumn("Fecha") # Mantenemos texto para evitar líos de formato al guardar
             },
             num_rows="dynamic",
