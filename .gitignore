@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data
+data/
+!data/categorias.csv
+# Keeping categories as example or base, but usually data is ignored. 
+# However, based on user context, data/base_cc_santander.csv might be ignored or not.
+# `dropbox_response.json` definitely should be ignored.
+dropbox_response.json
+
+# Streamlit
+.streamlit/
