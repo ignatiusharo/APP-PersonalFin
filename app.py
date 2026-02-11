@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 from utils.dropbox_client import DropboxManager
+from utils.date_utils import get_accounting_month
 
 # Configuración de página
 st.set_page_config(page_title="Mi Conciliador Pro", layout="wide")
@@ -123,7 +124,68 @@ def highlight_duplicates(df):
 # --- INTERFAZ ---
 st.title("💰 Conciliador Bancario Inteligente")
 
-tab1, tab2, tab3 = st.tabs(["📥 Cargar Cartola", "📊 Conciliación y Categorías", "⚙️ Configuración"])
+tab_home, tab1, tab2, tab3 = st.tabs(["🏠 Home / Resumen", "📥 Cargar Cartola", "📊 Conciliación y Categorías", "⚙️ Configuración"])
+
+with tab_home:
+    st.header("Resumen Financiero")
+    df_raw = cargar_datos()
+    
+    if not df_raw.empty:
+        # Calcular Mes Contable
+        df_raw['Fecha_dt'] = pd.to_datetime(df_raw['Fecha'], dayfirst=True, errors='coerce')
+        df_raw['Mes_Contable'] = df_raw['Fecha_dt'].apply(get_accounting_month)
+        
+        # Filtro de Mes
+        meses_disp = sorted(df_raw['Mes_Contable'].dropna().unique().tolist(), reverse=True)
+        col_filtro, col_vacio = st.columns([1, 3])
+        with col_filtro:
+            mes_sel = st.selectbox("Seleccionar Mes Contable", meses_disp)
+        
+        if mes_sel:
+            # Filtrar datos del mes seleccionado
+            df_mes = df_raw[df_raw['Mes_Contable'] == mes_sel]
+            
+            # Métricas Clave
+            total_gastos = df_mes[df_mes['Monto'] < 0]['Monto'].sum()
+            total_ingresos = df_mes[df_mes['Monto'] > 0]['Monto'].sum()
+            balance = total_gastos + total_ingresos
+            
+            # Tarjetas de Métricas
+            col_m1, col_m2, col_m3 = st.columns(3)
+            col_m1.metric("Ingresos", f"${total_ingresos:,.0f}")
+            col_m2.metric("Gastos", f"${total_gastos:,.0f}")
+            col_m3.metric("Balance", f"${balance:,.0f}", delta_color="normal")
+            
+            st.divider()
+            
+            # Gráfico y Tabla de Gastos por Categoría
+            col_graf, col_tabla = st.columns([2, 1])
+            
+            # Preparar datos agrupados (Solo Gastos)
+            df_gastos = df_mes[df_mes['Monto'] < 0].copy()
+            df_gastos['Monto_Abs'] = df_gastos['Monto'].abs()
+            gastos_por_cat = df_gastos.groupby('Categoria')['Monto_Abs'].sum().sort_values(ascending=False).reset_index()
+            
+            with col_graf:
+                st.subheader("Distribución de Gastos")
+                if not gastos_por_cat.empty:
+                    st.bar_chart(gastos_por_cat, x='Categoria', y='Monto_Abs', color="Monto_Abs", horizontal=True)
+                else:
+                    st.info("No hay gastos registrados en este mes.")
+            
+            with col_tabla:
+                st.subheader("Detalle por Categoría")
+                if not gastos_por_cat.empty:
+                    st.dataframe(
+                        gastos_por_cat,
+                        column_config={
+                            "Monto_Abs": st.column_config.NumberColumn("Monto", format="$%d"),
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
+    else:
+        st.info("No hay datos cargados aún.")
 
 with tab1:
     st.header("Carga de Datos")
