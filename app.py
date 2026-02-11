@@ -251,6 +251,25 @@ with tab3:
     st.header("⚙️ Gestión de Categorías")
     st.write("Aquí puedes agregar, editar o eliminar las categorías disponibles.")
     
+    # --- DIAGNÓSTICO DROPBOX ---
+    st.divider()
+    st.subheader("🔑 Estado de Conexión Dropbox")
+    if 'dropbox' not in st.secrets:
+        st.error("No se encontró la sección `[dropbox]` en los secretos.")
+    else:
+        db_conf = st.secrets['dropbox']
+        has_keys = all(k in db_conf for k in ['refresh_token', 'app_key', 'app_secret'])
+        if has_keys:
+            st.success("✅ Modo Detectado: **Renovación Automática (Recomendado)**")
+            st.info("El sistema usará el `refresh_token` para renovar la conexión automáticamente.")
+        else:
+            st.warning("⚠️ Modo Detectado: **Token Estático (Temporal)**")
+            st.write("Faltan algunas llaves para la renovación automática. Asegúrate de tener estas tres en tus secretos:")
+            st.code("refresh_token\napp_key\napp_secret")
+            if 'access_token' in db_conf:
+                st.info("Actualmente usando un `access_token` manual que podría expirar.")
+    
+    st.divider()
     # Load raw categories file for editing
     if os.path.exists(PATH_CAT):
         try:
