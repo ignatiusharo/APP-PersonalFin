@@ -244,7 +244,17 @@ with tab2:
     df_cat = cargar_datos()
     lista_categorias = cargar_categorias()
     
+    df_cat = cargar_datos()
+    lista_categorias = cargar_categorias()
+    
     if not df_cat.empty:
+        # KPI de Pendientes
+        n_pendientes = df_cat[df_cat['Categoria'] == 'Pendiente'].shape[0]
+        if n_pendientes > 0:
+            st.warning(f"🔔 Tienes **{n_pendientes}** movimientos pendientes de clasificar.")
+        else:
+            st.success("✅ ¡Felicidades! Todo está conciliado.")
+
         # Asegurar formato de fecha para filtrado
         df_cat_proc = df_cat.copy()
         df_cat_proc['Fecha_dt'] = pd.to_datetime(df_cat_proc['Fecha'], dayfirst=True, errors='coerce')
