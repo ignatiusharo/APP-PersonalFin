@@ -26,20 +26,6 @@ if 'dropbox' in st.secrets:
 else:
     dbx = None
 
-# Sidebar Info (Simplified)
-with st.sidebar:
-    st.header("☁️ Estado Cloud")
-    if dbx:
-        st.success("Conectado a Dropbox")
-        if st.button("🔄 Forzar Descarga"):
-            with st.spinner("Sincronizando..."):
-                ok1, _ = dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
-                ok2, _ = dbx.download_file("/categorias.csv", PATH_CAT)
-                if ok1 or ok2:
-                    st.toast("✅ Base de datos actualizada", icon="🔄")
-                    st.rerun()
-    else:
-        st.error("⚠️ Token no configurado")
 
 # --- FUNCIONES DE APOYO ---
 def cargar_datos():
