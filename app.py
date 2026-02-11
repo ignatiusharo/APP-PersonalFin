@@ -32,6 +32,13 @@ else:
 
 
 # --- FUNCIONES DE APOYO ---
+def formatear_monto(monto):
+    """Formatea un monto con puntos para miles y signo $"""
+    try:
+        return f"${monto:,.0f}".replace(",", ".")
+    except:
+        return str(monto)
+
 def cargar_datos():
     if os.path.exists(PATH_BANCO):
         try:
@@ -199,7 +206,7 @@ with tab_home:
                 presupuesto_total = df_presupuesto[mes_sel].sum() 
             
             col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("Ingresos Reales", f"${total_ingresos:,.0f}")
+            col_m1.metric("Ingresos Reales", formatear_monto(total_ingresos))
             
             # Métrica Gastos con Delta vs Presupuesto
             delta_presupuesto = None
@@ -207,11 +214,11 @@ with tab_home:
             if presupuesto_total > 0:
                 gastos_abs = abs(total_gastos)
                 diff = presupuesto_total - gastos_abs
-                delta_presupuesto = f"${diff:,.0f} vs Presupuesto"
+                delta_presupuesto = f"{formatear_monto(diff)} vs Presupuesto"
                 delta_color = "normal" if diff >= 0 else "inverse" # Verde si sobra, Rojo si falta
                 
-            col_m2.metric("Gastos Reales", f"${total_gastos:,.0f}", delta=delta_presupuesto, delta_color=delta_color)
-            col_m3.metric("Balance", f"${balance:,.0f}")
+            col_m2.metric("Gastos Reales", formatear_monto(total_gastos), delta=delta_presupuesto, delta_color=delta_color)
+            col_m3.metric("Balance", formatear_monto(balance))
             
             st.divider()
             
@@ -305,7 +312,8 @@ with tab_budget:
         use_container_width=True,
         key=f"budget_editor_{anio_sel}", # Key dinámica para resetear si cambia el año
         column_config={
-            "Categoria": st.column_config.TextColumn("Categoría", disabled=True) 
+            "Categoria": st.column_config.TextColumn("Categoría", disabled=True),
+            **{mes: st.column_config.NumberColumn(mes, format="$%d") for mes in cols_to_show if mes != "Categoria"}
         }
     )
     
