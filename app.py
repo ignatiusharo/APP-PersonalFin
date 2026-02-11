@@ -457,7 +457,7 @@ with tab2:
         df_cat_proc['Fecha_dt'] = pd.to_datetime(df_cat_proc['Fecha'], dayfirst=True, errors='coerce')
         
         # Filtros
-        col1, col2, col3 = st.columns([1, 1, 2])
+        col1, col2, col3, col4 = st.columns([1, 1.2, 1.2, 1.5])
         with col1:
             ver_pendientes = st.toggle("🔍 Solo Pendientes", value=True)
         with col2:
@@ -466,6 +466,10 @@ with tab2:
             meses_disponibles = sorted(df_cat_proc['Mes'].dropna().unique().tolist(), reverse=True)
             mes_filtrado = st.selectbox("📅 Mes", ["Todos"] + meses_disponibles)
         with col3:
+            # Filtro por Categoría
+            # Si "Solo Pendientes" está ON, forzamos el filtro a Pendiente o lo deshabilitamos opcionalmente
+            cat_filtrada = st.selectbox("🏷️ Categoría", ["Todas"] + lista_categorias, disabled=ver_pendientes)
+        with col4:
              filtro_detalle = st.text_input("🔎 Buscar en Detalle", placeholder="Ej: Supermercado")
 
         # Aplicar filtros al dataframe que se mostrará
@@ -476,6 +480,9 @@ with tab2:
 
         if ver_pendientes:
             df_display = df_display[df_display['Categoria'] == 'Pendiente']
+        elif cat_filtrada != "Todas":
+            df_display = df_display[df_display['Categoria'] == cat_filtrada]
+            
         if mes_filtrado != "Todos":
             df_display = df_display[df_display['Mes'] == mes_filtrado]
 
