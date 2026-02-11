@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 from datetime import datetime
+import altair as alt # Importamos altair
 from utils.dropbox_client import DropboxManager
 from utils.date_utils import get_accounting_month
 
@@ -239,7 +240,27 @@ with tab_home:
             with col_graf:
                 st.subheader("Real vs Presupuesto")
                 if not gastos_comparativo.empty:
-                    st.bar_chart(gastos_comparativo.set_index('Categoria')[['Monto_Abs', 'Presupuesto']], horizontal=True)
+                    # Transformar a formato largo para Altair
+                    df_chart = gastos_comparativo.melt(
+                        id_vars='Categoria', 
+                        value_vars=['Monto_Abs', 'Presupuesto'], 
+                        var_name='Tipo', 
+                        value_name='Monto'
+                    )
+                    
+                    # Renombrar para leyenda limpia
+                    df_chart['Tipo'] = df_chart['Tipo'].replace({'Monto_Abs': 'Real', 'Presupuesto': 'Meta'})
+                    
+                    # Gráfico de barras agrupadas
+                    chart = alt.Chart(df_chart).mark_bar().encode(
+                        y=alt.Y('Tipo:N', title=None, axis=None),
+                        x=alt.X('Monto:Q', title='Monto ($)'),
+                        color=alt.Color('Tipo:N', scale=alt.Scale(domain=['Real', 'Meta'], range=['#ff4b4b', '#1f77b4'])),
+                        row=alt.Row('Categoria:N', header=alt.Header(title=None, labelAngle=0, labelAlign='left'), sort=alt.EncodingSortField(field='Monto', op='max', order='descending')),
+                        tooltip=['Categoria', 'Tipo', alt.Tooltip('Monto', format='$,.0f')]
+                    ).properties(height=50) # Altura por fila
+                    
+                    st.altair_chart(chart, use_container_width=True)
                 else:
                     st.info("No hay datos para mostrar.")
             
