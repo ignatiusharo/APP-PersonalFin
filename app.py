@@ -51,13 +51,19 @@ def cargar_datos():
 def cargar_categorias():
     if os.path.exists(PATH_CAT):
         try:
-            # Use python engine for more robust parsing
+            # Use python engine for robustness
             df = pd.read_csv(PATH_CAT, engine='python', sep=',', on_bad_lines='skip')
-            # Support both new 'Categoria' and old 'categoria' columns
-            col_name = 'Categoria' if 'Categoria' in df.columns else 'categoria'
-            return df[col_name].dropna().tolist()
-        except (pd.errors.ParserError, Exception):
-            return ["Alimentación", "Transporte", "Vivienda", "Ocio", "Suscripciones", "Pendiente"]
+            # Normalizamos nombres de columnas para ser flexibles con espacios y acentos
+            df.columns = df.columns.str.strip()
+            # Buscamos una columna que contenga "categor" (ej: Categoria, Categoría, CATEGORIA)
+            col_cat = [c for c in df.columns if 'categor' in c.lower()]
+            if col_cat:
+                categorias = df[col_cat[0]].dropna().unique().tolist()
+                if categorias:
+                    return categorias
+        except (pd.errors.ParserError, Exception) as e:
+            st.error(f"Error cargando categorías: {str(e)}")
+            # pass
     return ["Alimentación", "Transporte", "Vivienda", "Ocio", "Suscripciones", "Pendiente"]
 
 def procesar_archivo(archivo):
