@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import os
+from datetime import datetime
 from utils.dropbox_client import DropboxManager
 from utils.date_utils import get_accounting_month
 
@@ -10,6 +11,7 @@ st.set_page_config(page_title="Mi Conciliador Pro", layout="wide")
 # Rutas de archivos
 PATH_BANCO = "data/base_cc_santander.csv"
 PATH_CAT = "data/categorias.csv"
+PATH_PRESUPUESTO = "data/presupuesto.csv"
 
 # --- DROPBOX CONFIG ---
 # --- DROPBOX CONFIG ---
@@ -56,6 +58,42 @@ def cargar_categorias():
             st.error(f"Error cargando categorías: {str(e)}")
             # pass
     return ["Alimentación", "Transporte", "Vivienda", "Ocio", "Suscripciones", "Pendiente"]
+
+def cargar_presupuesto(categorias_actuales):
+    """Carga o inicializa el presupuesto"""
+    # Meses por defecto para iniciar (ej: año actual + próximo)
+    meses_init = pd.period_range(start=datetime.now(), periods=12, freq='M').strftime('%Y-%m').tolist()
+    
+    if os.path.exists(PATH_PRESUPUESTO):
+        try:
+            df = pd.read_csv(PATH_PRESUPUESTO)
+        except:
+            df = pd.DataFrame(columns=['Categoria'])
+    else:
+        df = pd.DataFrame(columns=['Categoria'])
+    
+    # Sincronizar categorías: 
+    # 1. Asegurar que todas la categorias actuales existan en el presupuesto
+    cat_existentes = set(df['Categoria'].tolist()) if 'Categoria' in df.columns else set()
+    nuevas_cat = [c for c in categorias_actuales if c not in cat_existentes and c != "Pendiente"]
+    
+    if nuevas_cat:
+        df_new = pd.DataFrame({'Categoria': nuevas_cat})
+        df = pd.concat([df, df_new], ignore_index=True)
+    
+    # 2. Asegurar columnas de meses (al menos los próximos 12)
+    for mes in meses_init:
+        if mes not in df.columns:
+            df[mes] = 0
+            
+    # Llenar NaNs con 0
+    df = df.fillna(0)
+    
+    # Ordenar columnas: Categoria primero, luego meses ordenados
+    cols_meses = sorted([c for c in df.columns if c != 'Categoria'])
+    df = df[['Categoria'] + cols_meses]
+    
+    return df
 
 def procesar_archivo(archivo):
     """Detecta el tipo de archivo y lo procesa automáticamente"""
@@ -124,11 +162,12 @@ def highlight_duplicates(df):
 # --- INTERFAZ ---
 st.title("💰 Conciliador Bancario Inteligente")
 
-tab_home, tab1, tab2, tab3 = st.tabs(["🏠 Home / Resumen", "📥 Cargar Cartola", "📊 Conciliación y Categorías", "⚙️ Configuración"])
+tab_home, tab_budget, tab1, tab2, tab3 = st.tabs(["🏠 Home / Resumen", "💰 Presupuesto", "📥 Cargar Cartola", "📊 Conciliación y Categorías", "⚙️ Configuración"])
 
 with tab_home:
     st.header("Resumen Financiero")
     df_raw = cargar_datos()
+    df_presupuesto = cargar_presupuesto(cargar_categorias())
     
     if not df_raw.empty:
         # Calcular Mes Contable
@@ -145,47 +184,108 @@ with tab_home:
             # Filtrar datos del mes seleccionado
             df_mes = df_raw[df_raw['Mes_Contable'] == mes_sel]
             
-            # Métricas Clave
+            # Métricas Clave Real
             total_gastos = df_mes[df_mes['Monto'] < 0]['Monto'].sum()
             total_ingresos = df_mes[df_mes['Monto'] > 0]['Monto'].sum()
             balance = total_gastos + total_ingresos
             
-            # Tarjetas de Métricas
+            # Obtener Presupuesto del Mes
+            presupuesto_total = 0
+            if mes_sel in df_presupuesto.columns:
+                presupuesto_total = df_presupuesto[mes_sel].sum() 
+            
             col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("Ingresos", f"${total_ingresos:,.0f}")
-            col_m2.metric("Gastos", f"${total_gastos:,.0f}")
-            col_m3.metric("Balance", f"${balance:,.0f}", delta_color="normal")
+            col_m1.metric("Ingresos Reales", f"${total_ingresos:,.0f}")
+            
+            # Métrica Gastos con Delta vs Presupuesto
+            delta_presupuesto = None
+            delta_color = "normal"
+            if presupuesto_total > 0:
+                gastos_abs = abs(total_gastos)
+                diff = presupuesto_total - gastos_abs
+                delta_presupuesto = f"${diff:,.0f} vs Presupuesto"
+                delta_color = "normal" if diff >= 0 else "inverse" # Verde si sobra, Rojo si falta
+                
+            col_m2.metric("Gastos Reales", f"${total_gastos:,.0f}", delta=delta_presupuesto, delta_color=delta_color)
+            col_m3.metric("Balance", f"${balance:,.0f}")
             
             st.divider()
             
-            # Gráfico y Tabla de Gastos por Categoría
+            # Gráfico y Tabla de Gastos por Categoría + Presupuesto
             col_graf, col_tabla = st.columns([2, 1])
             
             # Preparar datos agrupados (Solo Gastos)
             df_gastos = df_mes[df_mes['Monto'] < 0].copy()
             df_gastos['Monto_Abs'] = df_gastos['Monto'].abs()
-            gastos_por_cat = df_gastos.groupby('Categoria')['Monto_Abs'].sum().sort_values(ascending=False).reset_index()
+            gastos_real = df_gastos.groupby('Categoria')['Monto_Abs'].sum().reset_index()
             
+            # Merge con Presupuesto
+            if mes_sel in df_presupuesto.columns:
+                presup_mes = df_presupuesto[['Categoria', mes_sel]].rename(columns={mes_sel: 'Presupuesto'})
+                gastos_comparativo = pd.merge(gastos_real, presup_mes, on='Categoria', how='outer').fillna(0)
+            else:
+                gastos_comparativo = gastos_real.copy()
+                gastos_comparativo['Presupuesto'] = 0
+            
+            # Filtramos solo aquellos que tengan movimiento o presupuesto
+            gastos_comparativo = gastos_comparativo[(gastos_comparativo['Monto_Abs'] > 0) | (gastos_comparativo['Presupuesto'] > 0)]
+            gastos_comparativo['Diferencia'] = gastos_comparativo['Presupuesto'] - gastos_comparativo['Monto_Abs']
+            
+            gastos_comparativo = gastos_comparativo.sort_values('Monto_Abs', ascending=False)
+
             with col_graf:
-                st.subheader("Distribución de Gastos")
-                if not gastos_por_cat.empty:
-                    st.bar_chart(gastos_por_cat, x='Categoria', y='Monto_Abs', color="Monto_Abs", horizontal=True)
+                st.subheader("Real vs Presupuesto")
+                if not gastos_comparativo.empty:
+                    st.bar_chart(gastos_comparativo.set_index('Categoria')[['Monto_Abs', 'Presupuesto']], horizontal=True)
                 else:
-                    st.info("No hay gastos registrados en este mes.")
+                    st.info("No hay datos para mostrar.")
             
             with col_tabla:
-                st.subheader("Detalle por Categoría")
-                if not gastos_por_cat.empty:
+                st.subheader("Detalle")
+                if not gastos_comparativo.empty:
                     st.dataframe(
-                        gastos_por_cat,
+                        gastos_comparativo[['Categoria', 'Monto_Abs', 'Presupuesto', 'Diferencia']],
                         column_config={
-                            "Monto_Abs": st.column_config.NumberColumn("Monto", format="$%d"),
+                            "Monto_Abs": st.column_config.NumberColumn("Real", format="$%d"),
+                            "Presupuesto": st.column_config.NumberColumn("Meta", format="$%d"),
+                            "Diferencia": st.column_config.NumberColumn("Dif", format="$%d"),
                         },
                         hide_index=True,
                         use_container_width=True
                     )
     else:
         st.info("No hay datos cargados aún.")
+
+with tab_budget:
+    st.header("Planificación Presupuestaria")
+    st.markdown("Define tus metas de gasto mensual por categoría. Los montos se guardarán automáticamente.")
+    
+    lista_cats = cargar_categorias()
+    df_budget = cargar_presupuesto(lista_cats)
+    
+    # Editor
+    df_budget_edited = st.data_editor(
+        df_budget,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="budget_editor",
+        column_config={
+            "Categoria": st.column_config.TextColumn("Categoría", disabled=True) 
+        }
+    )
+    
+    if st.button("💾 Guardar Presupuesto"):
+        df_budget_edited.to_csv(PATH_PRESUPUESTO, index=False)
+        st.success("✅ Presupuesto actualizado localmente")
+        
+        if dbx:
+            with st.spinner("Sincronizando con Dropbox..."):
+                ok, msg = dbx.upload_file(PATH_PRESUPUESTO, "/presupuesto.csv")
+                if ok: st.toast("☁️ Presupuesto respaldado en nube")
+                else: st.error(f"Error respaldo nube: {msg}")
+        
+        st.cache_data.clear()
+        st.rerun()
 
 with tab1:
     st.header("Carga de Datos")
