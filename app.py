@@ -61,8 +61,10 @@ def cargar_categorias():
 
 def cargar_presupuesto(categorias_actuales):
     """Carga o inicializa el presupuesto"""
-    # Meses por defecto para iniciar (ej: año actual + próximo)
-    meses_init = pd.period_range(start=datetime.now(), periods=12, freq='M').strftime('%Y-%m').tolist()
+    # Inicializar desde Enero del año actual hasta Diciembre del próximo año para asegurar cobertura
+    year_current = datetime.now().year
+    start_date = datetime(year_current, 1, 1)
+    meses_init = pd.period_range(start=start_date, periods=24, freq='M').strftime('%Y-%m').tolist()
     
     if os.path.exists(PATH_PRESUPUESTO):
         try:
@@ -94,6 +96,7 @@ def cargar_presupuesto(categorias_actuales):
     df = df[['Categoria'] + cols_meses]
     
     return df
+
 
 def procesar_archivo(archivo):
     """Detecta el tipo de archivo y lo procesa automáticamente"""
@@ -263,19 +266,33 @@ with tab_budget:
     lista_cats = cargar_categorias()
     df_budget = cargar_presupuesto(lista_cats)
     
+    # Filtro de Año
+    # Identificar años disponibles en las columnas (format YYYY-MM)
+    cols_meses = [c for c in df_budget.columns if c != "Categoria"]
+    anios_disponibles = sorted(list(set([c.split('-')[0] for c in cols_meses])), reverse=True)
+    
+    anio_sel = st.selectbox("📅 Filtrar por Año", anios_disponibles)
+    
+    # Filtrar columnas del DF para mostrar solo el año seleccionado + Categoria
+    cols_to_show = ["Categoria"] + [c for c in cols_meses if c.startswith(str(anio_sel))]
+    df_budget_display = df_budget[cols_to_show].copy()
+    
     # Editor
     df_budget_edited = st.data_editor(
-        df_budget,
+        df_budget_display,
         num_rows="dynamic",
         use_container_width=True,
-        key="budget_editor",
+        key=f"budget_editor_{anio_sel}", # Key dinámica para resetear si cambia el año
         column_config={
             "Categoria": st.column_config.TextColumn("Categoría", disabled=True) 
         }
     )
     
     if st.button("💾 Guardar Presupuesto"):
-        df_budget_edited.to_csv(PATH_PRESUPUESTO, index=False)
+        # Actualizar el DF original con los cambios del año seleccionado
+        df_budget.update(df_budget_edited)
+        
+        df_budget.to_csv(PATH_PRESUPUESTO, index=False)
         st.success("✅ Presupuesto actualizado localmente")
         
         if dbx:
