@@ -253,22 +253,40 @@ with tab3:
     
     # --- DIAGNÓSTICO DROPBOX ---
     st.divider()
-    st.subheader("🔑 Estado de Conexión Dropbox")
+    st.subheader("🔑 Configuración de Conexión Permanente")
+    
     if 'dropbox' not in st.secrets:
-        st.error("No se encontró la sección `[dropbox]` en los secretos.")
+        st.error("❌ No se encontró la sección `[dropbox]` en los secretos.")
     else:
         db_conf = st.secrets['dropbox']
-        has_keys = all(k in db_conf for k in ['refresh_token', 'app_key', 'app_secret'])
-        if has_keys:
-            st.success("✅ Modo Detectado: **Renovación Automática (Recomendado)**")
-            st.info("El sistema usará el `refresh_token` para renovar la conexión automáticamente.")
+        has_refresh = 'refresh_token' in db_conf
+        has_keys = all(k in db_conf for k in ['app_key', 'app_secret'])
+        
+        if has_refresh and has_keys:
+            st.success("✅ **Conexión Permanente Activada**: El sistema se renovará solo.")
         else:
-            st.warning("⚠️ Modo Detectado: **Token Estático (Temporal)**")
-            st.write("Faltan algunas llaves para la renovación automática. Asegúrate de tener estas tres en tus secretos:")
-            st.code("refresh_token\napp_key\napp_secret")
-            if 'access_token' in db_conf:
-                st.info("Actualmente usando un `access_token` manual que podría expirar.")
-    
+            st.warning("⚠️ **Conexión Temporal**: Tu token actual expirará pronto.")
+            st.write("Sigue estos pasos para activar la sincronización permanente:")
+            
+            with st.expander("📝 Guía Paso a Paso para obtener tu Refresh Token", expanded=not has_refresh):
+                st.markdown(f"""
+                1. **Copia tus llaves** desde el App Console de Dropbox a tus secretos:
+                   - `app_key` (está en la foto que enviaste)
+                   - `app_secret` (haz clic en 'Show' en la foto de Dropbox)
+                2. **Obtén tu código de autorización**:
+                   - Haz clic en este enlace: [Generar Código](https://www.dropbox.com/oauth2/authorize?client_id={db_conf.get('app_key', 'TU_APP_KEY')}&token_access_type=offline&response_type=code)
+                   - Autoriza la app y copia el código que te den.
+                3. **Genera el Refresh Token**: 
+                   - Como este es un proceso de un solo paso, una vez tengas el código, puedes obtener el token ejecutando este comando en una terminal (reemplazando los valores):
+                """)
+                st.code(f"""
+curl https://api.dropbox.com/oauth2/token \\
+    -d code=EL_CODIGO_QUE_COPIASTE \\
+    -d grant_type=authorization_code \\
+    -u {db_conf.get('app_key', 'TU_APP_KEY')}:{db_conf.get('app_secret', 'TU_APP_SECRET')}
+                """, language="bash")
+                st.markdown("4. **Guarda el `refresh_token`** que te devuelva el comando en tus secretos de Streamlit.")
+
     st.divider()
     # Load raw categories file for editing
     if os.path.exists(PATH_CAT):
