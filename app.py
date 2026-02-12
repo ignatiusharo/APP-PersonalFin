@@ -321,10 +321,20 @@ with tab_home:
             # Visualización: Tabla primero, luego Gráfico debajo
             st.subheader("Detalle del Mes")
             if not gastos_comparativo.empty:
+                # Función para pintar de rojo las diferencias negativas
+                def style_diff(row):
+                    val_original = gastos_comparativo_con_total.loc[row.name, 'Diferencia']
+                    styles = ['' for _ in row.index]
+                    if val_original < 0:
+                        # Buscamos el índice de la columna 'Diferencia' en el DF de visualización
+                        col_idx = list(row.index).index('Diferencia')
+                        styles[col_idx] = 'color: red; font-weight: bold'
+                    return styles
+
                 # Calcular altura dinámica para evitar scroll
                 h_dinamico = (len(gastos_comparativo_con_total) + 1) * 35 + 40
                 st.dataframe(
-                    df_display_comparativo[['Categoria', 'Monto_Abs', 'Presupuesto', 'Diferencia']],
+                    df_display_comparativo[['Categoria', 'Monto_Abs', 'Presupuesto', 'Diferencia']].style.apply(style_diff, axis=1),
                     column_config={
                         "Categoria": st.column_config.TextColumn("Categoría"),
                         "Monto_Abs": st.column_config.TextColumn("Real"),
@@ -634,26 +644,30 @@ with tab3:
         if es_permanente:
             st.success("✔️ **Conexión Robusta Activada**: Dropbox se renovará solo para siempre.")
         else:
-            st.warning("⚠️ **Conexión Frágil**: Estás usando un pase temporal. Se cortará solo pronto.")
+            st.warning("⚠️ **Conexión Frágil**: Estás usando un pase temporal.")
             
-            with st.expander("🛡️ ACTIVAR SOLUCIÓN ROBUSTA (Paso Único)", expanded=True):
-                st.info("Para que no tengas que entrar más a Dropbox manualmente, obtén tu llave permanente:")
-                
-                # Usar llaves si existen, si no, placeholders
-                ak = db_conf.get('app_key', 'TU_APP_KEY')
-                as_ = db_conf.get('app_secret', 'TU_APP_SECRET')
-                
-                st.markdown(f"""
-                1. **Generar Código**: Haz clic en [este enlace](https://www.dropbox.com/oauth2/authorize?client_id={ak}&token_access_type=offline&response_type=code) y copia el código que te den.
-                2. **Obtener Llave Permanente**: Ejecuta este comando en una terminal (o pídemelo a mí pasándome el código):
-                   ```bash
-                   curl https://api.dropbox.com/oauth2/token \\
-                       -d code=TU_CODIGO_AQUI \\
-                       -d grant_type=authorization_code \\
-                       -u {ak}:{as_}
-                   ```
-                3. **Guardar en Secretos**: El comando te dará un `refresh_token`. Guárdalo en Streamlit y **nunca más** verás este mensaje.
-                """)
+            # Usar llaves proporcionadas por el usuario para facilitar el proceso
+            ak = db_conf.get('app_key', 'y7ucm69p0q2g3zx')
+            as_ = db_conf.get('app_secret', 'glmw7cg29obx2vo')
+            
+            with st.expander("🛡️ PASO 1: Configurar Credenciales Maestro (Solo una vez)", expanded=not (ak != 'TU_APP_KEY' and as_ != 'TU_APP_SECRET')):
+                if db_conf.get('app_key') == 'TU_APP_KEY_AQUI' or not db_conf.get('app_key'):
+                    st.error("❗ **Faltan las llaves maestro en tus Secretos de Streamlit.**")
+                    st.write("Copia y pega esto en tus Secretos (reemplazando con tus datos de Dropbox):")
+                    st.code(f"""
+[dropbox]
+app_key = "{ak}"
+app_secret = "{as_}"
+refresh_token = "DEJAR_VACIO_POR_AHORA"
+                    """, language="toml")
+                    st.info("💡 Obtén estas llaves en la pestaña 'Settings' de tu app en el [Dropbox App Console](https://www.dropbox.com/developers/apps).")
+                else:
+                    st.success("✅ Llaves maestro detectadas. Procede a generar el código:")
+                    st.markdown(f"""
+                    1. **Generar Código**: Haz clic en [este enlace](https://www.dropbox.com/oauth2/authorize?client_id={ak}&token_access_type=offline&response_type=code) y copia el código que te den.
+                    2. **Obtener Llave Permanente**: Pásame el código por el chat y yo generaré la llave por ti.
+                    3. **Guardar**: El `refresh_token` que te daré, agrégalo a tus secretos y listo.
+                    """)
     
     st.divider()
     st.write("Aquí puedes agregar, editar o eliminar las categorías disponibles.")
