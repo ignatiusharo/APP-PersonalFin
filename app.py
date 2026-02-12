@@ -390,7 +390,7 @@ with tab_budget:
     fila_saldo.update(saldos)
     fila_acum.update(saldo_acum)
     
-    df_budget_visual = pd.concat([df_budget_display, pd.DataFrame([fila_saldo, fila_acum])], ignore_index=True)
+    df_budget_visual = df_budget_display.copy()
 
     # Función para Guardado Seguro Autonómo
     def guardar_presupuesto_seguro(df_editado):
@@ -439,7 +439,7 @@ with tab_budget:
         color = 'red' if val < 0 else 'green'
         return f'color: {color}; font-weight: bold'
 
-    df_saldos_visual = df_budget_visual[df_budget_visual['Categoria'].str.contains("SALDO")].copy()
+    df_saldos_visual = pd.DataFrame([fila_saldo, fila_acum])
     
     # Redondear para evitar decimales molestos
     for col in cols_to_show[1:]:
