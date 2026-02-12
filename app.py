@@ -410,10 +410,13 @@ with tab_budget:
         st.cache_data.clear()
 
     # Editor con Auto-save
+    # Altura dinámica: ~35px por fila + cabecera
+    h_editor = (len(df_budget_visual) + 1) * 35 + 45
     df_budget_edited = st.data_editor(
         df_budget_visual,
         num_rows="dynamic",
         use_container_width=True,
+        height=h_editor,
         key=f"budget_editor_{anio_sel}",
         column_config={
             "Categoria": st.column_config.TextColumn("Categoría", disabled=True),
@@ -438,10 +441,19 @@ with tab_budget:
 
     df_saldos_visual = df_budget_visual[df_budget_visual['Categoria'].str.contains("SALDO")].copy()
     
+    # Redondear para evitar decimales molestos
+    for col in cols_to_show[1:]:
+        df_saldos_visual[col] = pd.to_numeric(df_saldos_visual[col], errors='coerce').fillna(0).round(0).astype(int)
+    
+    h_saldos = (len(df_saldos_visual) + 1) * 35 + 45
     st.dataframe(
         df_saldos_visual.style.applymap(color_saldos, subset=pd.IndexSlice[:, cols_to_show[1:]]),
         use_container_width=True,
-        hide_index=True
+        hide_index=True,
+        height=h_saldos,
+        column_config={
+            mes: st.column_config.NumberColumn(mes, format="$%d") for mes in cols_to_show if mes != "Categoria"
+        }
     )
 
 with tab1:
