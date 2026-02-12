@@ -626,7 +626,6 @@ with tab3:
     st.header("⚙️ Gestión de Categorías")
     st.write("Aquí puedes agregar, editar o eliminar las categorías disponibles.")
     
-    st.write("Aquí puedes agregar, editar o eliminar las categorías disponibles.")
     # Load raw categories file for editing
     if os.path.exists(PATH_CAT):
         try:
@@ -637,11 +636,13 @@ with tab3:
     else:
         df_config_cat = pd.DataFrame(columns=['Categoria', 'Tipo'])
     
-    # Editable DataFrame
+    # Editable DataFrame con altura dinámica para evitar scroll
+    h_cats = (len(df_config_cat) + 1) * 35 + 45
     df_cat_edited = st.data_editor(
         df_config_cat,
         num_rows="dynamic",
         use_container_width=True,
+        height=h_cats,
         key="editor_categorias"
     )
     
