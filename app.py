@@ -385,37 +385,7 @@ with tab_budget:
     cols_to_show = ["Categoria"] + [c for c in cols_meses if c.startswith(str(anio_sel))]
     df_budget_display = df_budget[cols_to_show].copy()
     
-    # --- CÁLCULO DE SALDOS PARA VISUALIZACIÓN ---
-    # Identificar categorías de Ingreso vs Gasto
-    cats_ingreso = [c for c in df_budget_display['Categoria'] if tipo_map.get(c) == 'Ingresos']
-    cats_gasto = [c for c in df_budget_display['Categoria'] if c not in cats_ingreso]
-    
-    # Calcular Saldo Mensual
-    saldos = {}
-    for cl in cols_to_show[1:]: # Meses
-        ing = df_budget_display[df_budget_display['Categoria'].isin(cats_ingreso)][cl].sum()
-        gas = df_budget_display[df_budget_display['Categoria'].isin(cats_gasto)][cl].sum()
-        saldos[cl] = ing - gas
-    
-    # Calcular Saldo Acumulado (necesitamos todos los meses previos, no solo los del año visible)
-    # Para simplificar, acumulamos desde el inicio del DF cargado
-    saldo_acum = {}
-    acumulado = 0
-    # Obtenemos TODOS los meses en orden cronológico
-    todos_meses = sorted([c for c in df_budget.columns if c != "Categoria"])
-    for m in todos_meses:
-        ing_m = df_budget[df_budget['Categoria'].isin(cats_ingreso)][m].sum()
-        gas_m = df_budget[df_budget['Categoria'].isin(cats_gasto)][m].sum()
-        acumulado += (ing_m - gas_m)
-        if m in cols_to_show:
-            saldo_acum[m] = acumulado
-
-    # Añadir filas al display (solo visual)
-    fila_saldo = {"Categoria": "📊 SALDO MES"}
-    fila_acum = {"Categoria": "📈 SALDO ACUMULADO"}
-    fila_saldo.update(saldos)
-    fila_acum.update(saldo_acum)
-    
+    # --- VISTA DEL EDITOR (Primero) ---
     df_budget_visual = df_budget_display.copy()
 
     # Función para Guardado Seguro Autonómo
@@ -434,6 +404,7 @@ with tab_budget:
         if dbx:
             dbx.upload_file(PATH_PRESUPUESTO, "/presupuesto.csv")
         st.cache_data.clear()
+        st.rerun() # Forzar sincronización completa
 
     # Editor con Auto-save
     # Altura dinámica: ~35px por fila + cabecera
@@ -458,13 +429,46 @@ with tab_budget:
             guardar_presupuesto_seguro(df_budget_edited)
             st.toast("✅ Cambios guardados automáticamente")
 
-    # Estilo condicional para saldos (solo visual informativo debajo del editor)
+    # --- CÁLCULO DINÁMICO DE SALDOS (Después del editor) ---
+    # Creamos un DF "al aire" que combina el original con los cambios del editor para el cálculo
+    df_live = df_budget.copy()
+    df_live.set_index('Categoria', inplace=True)
+    df_edit_for_calc = df_budget_edited.set_index('Categoria')
+    df_live.update(df_edit_for_calc)
+    df_live.reset_index(inplace=True)
+
+    cats_ingreso = [c for c in df_live['Categoria'] if tipo_map.get(c) == 'Ingresos']
+    cats_gasto = [c for c in df_live['Categoria'] if c not in cats_ingreso]
+    
+    # Saldo Mensual
+    saldos_live = {}
+    for cl in cols_to_show[1:]:
+        ing = df_live[df_live['Categoria'].isin(cats_ingreso)][cl].sum()
+        gas = df_live[df_live['Categoria'].isin(cats_gasto)][cl].sum()
+        saldos_live[cl] = ing - gas
+    
+    # Saldo Acumulado
+    saldo_acum_live = {}
+    acum_live = 0
+    todos_meses = sorted([c for c in df_live.columns if c != "Categoria"])
+    for m in todos_meses:
+        ing_m = df_live[df_live['Categoria'].isin(cats_ingreso)][m].sum()
+        gas_m = df_live[df_live['Categoria'].isin(cats_gasto)][m].sum()
+        acum_live += (ing_m - gas_m)
+        if m in cols_to_show:
+            saldo_acum_live[m] = acum_live
+
     st.markdown("### Resumen de Saldos")
     
     def color_saldos(val):
         color = 'red' if val < 0 else 'green'
         return f'color: {color}; font-weight: bold'
 
+    fila_saldo = {"Categoria": "📊 SALDO MES"}
+    fila_acum = {"Categoria": "📈 SALDO ACUMULADO"}
+    fila_saldo.update(saldos_live)
+    fila_acum.update(saldo_acum_live)
+    
     df_saldos_visual = pd.DataFrame([fila_saldo, fila_acum])
     
     # Redondear para evitar decimales molestos
