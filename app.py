@@ -256,16 +256,26 @@ with tab_home:
             # Ordenar: primero por Tipo (Orden) y luego por Monto
             gastos_comparativo = gastos_comparativo.sort_values(['Orden', 'Monto_Abs'], ascending=[True, False])
             
-            # Añadir Fila de TOTAL
-            total_real = gastos_comparativo['Monto_Abs'].sum()
-            total_presup = gastos_comparativo['Presupuesto'].sum()
-            total_dif = total_presup - total_real
+            # Añadir Fila de TOTAL (Ingresos - Gastos)
+            # Diferenciar ingresos para suma positiva, el resto resta
+            gastos_real_con_tipo = pd.merge(gastos_real, df_cat_map[['Categoria', 'Tipo']], on='Categoria', how='left')
+            
+            sum_ingresos_real = gastos_real_con_tipo[gastos_real_con_tipo['Tipo'] == 'Ingresos']['Monto_Abs'].sum()
+            sum_gastos_real = gastos_real_con_tipo[gastos_real_con_tipo['Tipo'] != 'Ingresos']['Monto_Abs'].sum()
+            total_real_balance = sum_ingresos_real - sum_gastos_real
+            
+            presup_con_tipo = pd.merge(presup_mes, df_cat_map[['Categoria', 'Tipo']], on='Categoria', how='left')
+            sum_ingresos_presup = presup_con_tipo[presup_con_tipo['Tipo'] == 'Ingresos']['Presupuesto'].sum()
+            sum_gastos_presup = presup_con_tipo[presup_con_tipo['Tipo'] != 'Ingresos']['Presupuesto'].sum()
+            total_presup_balance = sum_ingresos_presup - sum_gastos_presup
+            
+            total_dif_balance = total_presup_balance - total_real_balance
             
             fila_total = pd.DataFrame({
                 'Categoria': ['--- TOTAL ---'],
-                'Monto_Abs': [total_real],
-                'Presupuesto': [total_presup],
-                'Diferencia': [total_dif],
+                'Monto_Abs': [total_real_balance],
+                'Presupuesto': [total_presup_balance],
+                'Diferencia': [total_dif_balance],
                 'Tipo_Cat': ['Total'],
                 'Orden': [100]
             })
@@ -382,43 +392,57 @@ with tab_budget:
     
     df_budget_visual = pd.concat([df_budget_display, pd.DataFrame([fila_saldo, fila_acum])], ignore_index=True)
 
-    # Editor
+    # Función para Guardado Seguro Autonómo
+    def guardar_presupuesto_seguro(df_editado):
+        # Filtrar el DF editado para quitar las filas de Saldo antes de guardar
+        df_to_save = df_editado[~df_editado['Categoria'].isin(["📊 SALDO MES", "📈 SALDO ACUMULADO"])].copy()
+        
+        # --- FIX: Guardado seguro alineando por Categoria ---
+        df_full = cargar_presupuesto(cargar_categorias())
+        df_full.set_index('Categoria', inplace=True)
+        df_to_save.set_index('Categoria', inplace=True)
+        df_full.update(df_to_save)
+        df_full.reset_index(inplace=True)
+        
+        df_full.to_csv(PATH_PRESUPUESTO, index=False)
+        if dbx:
+            dbx.upload_file(PATH_PRESUPUESTO, "/presupuesto.csv")
+        st.cache_data.clear()
+
+    # Editor con Auto-save
     df_budget_edited = st.data_editor(
         df_budget_visual,
         num_rows="dynamic",
         use_container_width=True,
-        key=f"budget_editor_{anio_sel}", # Key dinámica para resetear si cambia el año
+        key=f"budget_editor_{anio_sel}",
         column_config={
             "Categoria": st.column_config.TextColumn("Categoría", disabled=True),
             **{mes: st.column_config.NumberColumn(mes, format="$%d") for mes in cols_to_show if mes != "Categoria"}
         },
-        disabled=["Categoria"] # Bloquear edición de nombres de fila (incluyendo Saldo)
+        disabled=["Categoria"]
     )
     
-    if st.button("💾 Guardar Presupuesto"):
-        # Filtrar el DF editado para quitar las filas de Saldo antes de guardar
-        df_to_save = df_budget_edited[~df_budget_edited['Categoria'].isin(["📊 SALDO MES", "📈 SALDO ACUMULADO"])]
-        
-        # --- FIX: Guardado seguro alineando por Categoria ---
-        df_budget.set_index('Categoria', inplace=True)
-        df_to_save.set_index('Categoria', inplace=True)
-        df_budget.update(df_to_save)
-        df_budget.reset_index(inplace=True)
-        
-        # Eliminar formato visual de miles antes de guardar (ya que update puede traer el format visual si no se tiene cuidado)
-        # Pero aquí df_to_save viene del data_editor que maneja números puros, así que todo bien.
-        
-        df_budget.to_csv(PATH_PRESUPUESTO, index=False)
-        st.success("✅ Presupuesto actualizado localmente")
-        
-        if dbx:
-            with st.spinner("Sincronizando con Dropbox..."):
-                ok, msg = dbx.upload_file(PATH_PRESUPUESTO, "/presupuesto.csv")
-                if ok: st.toast("☁️ Presupuesto respaldado en nube")
-                else: st.error(f"Error respaldo nube: {msg}")
-        
-        st.cache_data.clear()
-        st.rerun()
+    # Manejar cambios automáticamente
+    if f"budget_editor_{anio_sel}" in st.session_state:
+        state = st.session_state[f"budget_editor_{anio_sel}"]
+        if state["edited_rows"] or state["added_rows"] or state["deleted_rows"]:
+            guardar_presupuesto_seguro(df_budget_edited)
+            st.toast("✅ Cambios guardados automáticamente")
+
+    # Estilo condicional para saldos (solo visual informativo debajo del editor)
+    st.markdown("### Resumen de Saldos")
+    
+    def color_saldos(val):
+        color = 'red' if val < 0 else 'green'
+        return f'color: {color}; font-weight: bold'
+
+    df_saldos_visual = df_budget_visual[df_budget_visual['Categoria'].str.contains("SALDO")].copy()
+    
+    st.dataframe(
+        df_saldos_visual.style.applymap(color_saldos, subset=pd.IndexSlice[:, cols_to_show[1:]]),
+        use_container_width=True,
+        hide_index=True
+    )
 
 with tab1:
     st.header("Carga de Datos")
