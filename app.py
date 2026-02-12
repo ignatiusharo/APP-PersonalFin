@@ -99,7 +99,8 @@ def cargar_presupuesto(categorias_actuales):
         df['Categoria'] = []
     df['Categoria'] = df['Categoria'].astype(str).str.strip()
     
-    # 2. Sincronizar categorías: Añadir faltantes
+    # 2. Sincronizar categorías: 
+    # A. Añadir faltantes
     cat_existentes = set(df['Categoria'].tolist())
     nuevas_cat = [c for c in categorias_actuales if c not in cat_existentes and c != "Pendiente"]
     
@@ -108,11 +109,15 @@ def cargar_presupuesto(categorias_actuales):
         df_new = pd.DataFrame({'Categoria': nuevas_cat})
         df = pd.concat([df, df_new], ignore_index=True)
         hay_cambios = True
+
+    # B. ELIMINAR CATEGORÍAS SOBRANTES (Sincronización estricta)
+    # Solo dejamos las que están en la configuración actual (más "Pendiente" si aplica, aunque presupuesto no lo usa típicamente)
+    mask_keep = df['Categoria'].isin(categorias_actuales)
+    if not mask_keep.all():
+        df = df[mask_keep].copy()
+        hay_cambios = True
     
-    # 3. Eliminar categorías que ya no existen en la configuración (Opcional, pero recomendado para coherencia)
-    # Por ahora solo añadimos para no borrar datos históricos por accidente.
-    
-    # 4. Asegurar columnas de meses
+    # 3. Asegurar columnas de meses
     for mes in meses_init:
         if mes not in df.columns:
             df[mes] = 0
