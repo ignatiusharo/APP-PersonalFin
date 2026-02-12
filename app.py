@@ -222,10 +222,17 @@ with tab_home:
             
             st.divider()
             
-            # Gráfico y Tabla de Gastos por Categoría + Presupuesto
-            col_tabla, col_graf = st.columns([1.2, 1])
+            # Preparar datos por Tipo/Orden
+            if os.path.exists(PATH_CAT):
+                df_cat_map = pd.read_csv(PATH_CAT, engine='python')
+                tipo_map = dict(zip(df_cat_map['Categoria'], df_cat_map['Tipo']))
+            else:
+                tipo_map = {}
             
-            # Preparar datos agrupados (Solo Gastos)
+            # Orden de tipos: Ingresos (1), Pendientes (2), Gastos fijos (3), Gastos Variables (4)
+            orden_tipos = {"Ingresos": 1, "Pendiente": 2, "Gastos fijos": 3, "Gastos Variables": 4}
+            
+            # Preparar datos agrupados
             df_gastos = df_mes[df_mes['Monto'] < 0].copy()
             df_gastos['Monto_Abs'] = df_gastos['Monto'].abs()
             gastos_real = df_gastos.groupby('Categoria')['Monto_Abs'].sum().reset_index()
@@ -242,65 +249,79 @@ with tab_home:
             gastos_comparativo = gastos_comparativo[(gastos_comparativo['Monto_Abs'] > 0) | (gastos_comparativo['Presupuesto'] > 0)]
             gastos_comparativo['Diferencia'] = gastos_comparativo['Presupuesto'] - gastos_comparativo['Monto_Abs']
             
-            gastos_comparativo = gastos_comparativo.sort_values('Monto_Abs', ascending=False)
+            # Asignar tipos y orden
+            gastos_comparativo['Tipo_Cat'] = gastos_comparativo['Categoria'].apply(lambda x: tipo_map.get(x, 'Otros'))
+            gastos_comparativo['Orden'] = gastos_comparativo['Tipo_Cat'].apply(lambda x: orden_tipos.get(x, 99))
+            
+            # Ordenar: primero por Tipo (Orden) y luego por Monto
+            gastos_comparativo = gastos_comparativo.sort_values(['Orden', 'Monto_Abs'], ascending=[True, False])
+            
+            # Añadir Fila de TOTAL
+            total_real = gastos_comparativo['Monto_Abs'].sum()
+            total_presup = gastos_comparativo['Presupuesto'].sum()
+            total_dif = total_presup - total_real
+            
+            fila_total = pd.DataFrame({
+                'Categoria': ['--- TOTAL ---'],
+                'Monto_Abs': [total_real],
+                'Presupuesto': [total_presup],
+                'Diferencia': [total_dif],
+                'Tipo_Cat': ['Total'],
+                'Orden': [100]
+            })
+            
+            gastos_comparativo_con_total = pd.concat([gastos_comparativo, fila_total], ignore_index=True)
 
+            # Preparar DF para visualización (con puntos forzados)
+            df_display_comparativo = gastos_comparativo_con_total.copy()
+            for col in ['Monto_Abs', 'Presupuesto', 'Diferencia']:
+                df_display_comparativo[col] = df_display_comparativo[col].apply(formatear_monto)
+
+            # Layout: 3/4 para la tabla, 1/4 para el gráfico
+            col_tabla, col_graf = st.columns([2.5, 1])
+
+            with col_tabla:
+                st.subheader("Detalle del Mes")
+                if not gastos_comparativo.empty:
+                    # Calcular altura dinámica para evitar scroll (aproximadamente 35px por fila)
+                    h_dinamico = (len(gastos_comparativo_con_total) + 1) * 35 + 40
+                    st.dataframe(
+                        df_display_comparativo[['Categoria', 'Monto_Abs', 'Presupuesto', 'Diferencia']],
+                        column_config={
+                            "Categoria": st.column_config.TextColumn("Categoría"),
+                            "Monto_Abs": st.column_config.TextColumn("Real"),
+                            "Presupuesto": st.column_config.TextColumn("Meta"),
+                            "Diferencia": st.column_config.TextColumn("Dif"),
+                        },
+                        hide_index=True,
+                        use_container_width=True,
+                        height=min(h_dinamico, 1000)
+                    )
+            
             with col_graf:
                 st.subheader("Resumen por Tipo")
-                
-                # Obtener tipos de categorías
-                if os.path.exists(PATH_CAT):
-                    df_cat_map = pd.read_csv(PATH_CAT, engine='python')
-                    tipo_map = dict(zip(df_cat_map['Categoria'], df_cat_map['Tipo']))
-                else:
-                    tipo_map = {}
-                
-                # Preparar datos por Tipo
-                gastos_comparativo['Tipo_Cat'] = gastos_comparativo['Categoria'].apply(lambda x: tipo_map.get(x, 'Otros'))
                 resumen_tipo = gastos_comparativo.groupby('Tipo_Cat').agg({'Monto_Abs': 'sum', 'Presupuesto': 'sum'}).reset_index()
                 
                 if not resumen_tipo.empty:
-                    # Transformar a formato largo para Altair
                     df_chart = resumen_tipo.melt(
                         id_vars='Tipo_Cat', 
                         value_vars=['Monto_Abs', 'Presupuesto'], 
                         var_name='Tipo_Dato', 
                         value_name='Monto'
                     )
-                    
-                    # Renombrar para leyenda limpia
                     df_chart['Tipo_Dato'] = df_chart['Tipo_Dato'].replace({'Monto_Abs': 'Real', 'Presupuesto': 'Meta'})
                     
-                    # Gráfico de barras
                     chart = alt.Chart(df_chart).mark_bar().encode(
                         x=alt.X('Tipo_Dato:N', title=None),
                         y=alt.Y('Monto:Q', title='Monto ($)'),
                         color=alt.Color('Tipo_Dato:N', scale=alt.Scale(domain=['Real', 'Meta'], range=['#ff4b4b', '#1f77b4'])),
                         column=alt.Column('Tipo_Cat:N', header=alt.Header(title=None, labelAngle=0)),
                         tooltip=['Tipo_Cat', 'Tipo_Dato', alt.Tooltip('Monto', format='$,.0f')]
-                    ).properties(width=100, height=200)
+                    ).properties(width=80, height=200)
                     
                     st.altair_chart(chart, use_container_width=False)
                 else:
-                    st.info("No hay datos para mostrar.")
-            
-            # Preparar DF para visualización (con puntos forzados)
-            df_display_comparativo = gastos_comparativo.copy()
-            for col in ['Monto_Abs', 'Presupuesto', 'Diferencia']:
-                df_display_comparativo[col] = df_display_comparativo[col].apply(formatear_monto)
-
-            with col_tabla:
-                st.subheader("Detalle")
-                if not gastos_comparativo.empty:
-                    st.dataframe(
-                        df_display_comparativo[['Categoria', 'Monto_Abs', 'Presupuesto', 'Diferencia']],
-                        column_config={
-                            "Monto_Abs": st.column_config.TextColumn("Real"),
-                            "Presupuesto": st.column_config.TextColumn("Meta"),
-                            "Diferencia": st.column_config.TextColumn("Dif"),
-                        },
-                        hide_index=True,
-                        use_container_width=True
-                    )
+                    st.info("No hay datos.")
     else:
         st.info("No hay datos cargados aún.")
 
@@ -381,8 +402,11 @@ with tab_budget:
         # Filtrar el DF editado para quitar las filas de Saldo antes de guardar
         df_to_save = df_budget_edited[~df_budget_edited['Categoria'].isin(["📊 SALDO MES", "📈 SALDO ACUMULADO"])]
         
-        # Actualizar el DF original con los cambios del año seleccionado
+        # --- FIX: Guardado seguro alineando por Categoria ---
+        df_budget.set_index('Categoria', inplace=True)
+        df_to_save.set_index('Categoria', inplace=True)
         df_budget.update(df_to_save)
+        df_budget.reset_index(inplace=True)
         
         # Eliminar formato visual de miles antes de guardar (ya que update puede traer el format visual si no se tiene cuidado)
         # Pero aquí df_to_save viene del data_editor que maneja números puros, así que todo bien.
