@@ -223,7 +223,7 @@ with tab_home:
             st.divider()
             
             # Gráfico y Tabla de Gastos por Categoría + Presupuesto
-            col_graf, col_tabla = st.columns([1.2, 1])
+            col_tabla, col_graf = st.columns([1.2, 1])
             
             # Preparar datos agrupados (Solo Gastos)
             df_gastos = df_mes[df_mes['Monto'] < 0].copy()
@@ -245,29 +245,41 @@ with tab_home:
             gastos_comparativo = gastos_comparativo.sort_values('Monto_Abs', ascending=False)
 
             with col_graf:
-                st.subheader("Real vs Presupuesto")
-                if not gastos_comparativo.empty:
+                st.subheader("Resumen por Tipo")
+                
+                # Obtener tipos de categorías
+                if os.path.exists(PATH_CAT):
+                    df_cat_map = pd.read_csv(PATH_CAT, engine='python')
+                    tipo_map = dict(zip(df_cat_map['Categoria'], df_cat_map['Tipo']))
+                else:
+                    tipo_map = {}
+                
+                # Preparar datos por Tipo
+                gastos_comparativo['Tipo_Cat'] = gastos_comparativo['Categoria'].apply(lambda x: tipo_map.get(x, 'Otros'))
+                resumen_tipo = gastos_comparativo.groupby('Tipo_Cat').agg({'Monto_Abs': 'sum', 'Presupuesto': 'sum'}).reset_index()
+                
+                if not resumen_tipo.empty:
                     # Transformar a formato largo para Altair
-                    df_chart = gastos_comparativo.melt(
-                        id_vars='Categoria', 
+                    df_chart = resumen_tipo.melt(
+                        id_vars='Tipo_Cat', 
                         value_vars=['Monto_Abs', 'Presupuesto'], 
-                        var_name='Tipo', 
+                        var_name='Tipo_Dato', 
                         value_name='Monto'
                     )
                     
                     # Renombrar para leyenda limpia
-                    df_chart['Tipo'] = df_chart['Tipo'].replace({'Monto_Abs': 'Real', 'Presupuesto': 'Meta'})
+                    df_chart['Tipo_Dato'] = df_chart['Tipo_Dato'].replace({'Monto_Abs': 'Real', 'Presupuesto': 'Meta'})
                     
-                    # Gráfico de barras agrupadas
+                    # Gráfico de barras
                     chart = alt.Chart(df_chart).mark_bar().encode(
-                        y=alt.Y('Tipo:N', title=None, axis=None),
-                        x=alt.X('Monto:Q', title='Monto ($)'),
-                        color=alt.Color('Tipo:N', scale=alt.Scale(domain=['Real', 'Meta'], range=['#ff4b4b', '#1f77b4'])),
-                        row=alt.Row('Categoria:N', header=alt.Header(title=None, labelAngle=0, labelAlign='left'), sort=alt.EncodingSortField(field='Monto', op='max', order='descending')),
-                        tooltip=['Categoria', 'Tipo', alt.Tooltip('Monto', format='$,.0f')]
-                    ).properties(height=50) # Altura por fila
+                        x=alt.X('Tipo_Dato:N', title=None),
+                        y=alt.Y('Monto:Q', title='Monto ($)'),
+                        color=alt.Color('Tipo_Dato:N', scale=alt.Scale(domain=['Real', 'Meta'], range=['#ff4b4b', '#1f77b4'])),
+                        column=alt.Column('Tipo_Cat:N', header=alt.Header(title=None, labelAngle=0)),
+                        tooltip=['Tipo_Cat', 'Tipo_Dato', alt.Tooltip('Monto', format='$,.0f')]
+                    ).properties(width=100, height=200)
                     
-                    st.altair_chart(chart, use_container_width=True)
+                    st.altair_chart(chart, use_container_width=False)
                 else:
                     st.info("No hay datos para mostrar.")
             
@@ -371,6 +383,9 @@ with tab_budget:
         
         # Actualizar el DF original con los cambios del año seleccionado
         df_budget.update(df_to_save)
+        
+        # Eliminar formato visual de miles antes de guardar (ya que update puede traer el format visual si no se tiene cuidado)
+        # Pero aquí df_to_save viene del data_editor que maneja números puros, así que todo bien.
         
         df_budget.to_csv(PATH_PRESUPUESTO, index=False)
         st.success("✅ Presupuesto actualizado localmente")
@@ -500,7 +515,7 @@ with tab2:
             df_editor_input,
             column_config={
                 "Categoria": st.column_config.SelectboxColumn("Categoría", options=lista_categorias, required=True),
-                "Monto": st.column_config.NumberColumn(format="$,.0f"),
+                "Monto": st.column_config.NumberColumn(format="$%d"),
                 "Fecha": st.column_config.TextColumn("Fecha") # Mantenemos texto para evitar líos de formato al guardar
             },
             num_rows="dynamic",
