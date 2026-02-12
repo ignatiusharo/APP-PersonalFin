@@ -393,42 +393,43 @@ with tab_budget:
     # --- VISTA DEL EDITOR (Primero) ---
     df_budget_visual = df_budget_display.copy()
 
-    # Función Callback para Guardado Automático mediante on_change
-    def cb_guardar_presupuesto():
-        # Streamlit pone los cambios en session_state bajo la key del widget
+    # Función Callback para Guardado Automático mediante on_change (ESTABLE)
+    def on_budget_edit():
         state_key = f"budget_editor_{anio_sel}"
         if state_key in st.session_state:
             cambios = st.session_state[state_key]
             if cambios["edited_rows"] or cambios["added_rows"] or cambios["deleted_rows"]:
-                # Cargamos el full para no perder otros años
+                # 1. Obtener el DataFrame actual del estado del widget (ya tiene los cambios aplicados)
+                # Nota: En un callback, st.session_state[key] contiene 'edited_rows', 'added_rows', etc.
+                # Pero no el DF final. Necesitamos aplicar los cambios manualmente al DF base.
+                
+                df_base = df_budget_visual.copy()
+                
+                # Aplicar ediciones (Streamlit indices son enteros si no hay index definido)
+                for row_idx, changed_cols in cambios["edited_rows"].items():
+                    idx = int(row_idx)
+                    for col, val in changed_cols.items():
+                        df_base.loc[idx, col] = val
+                
+                # Manejar agregados/borrados si fuera necesario (aunque presupuesto suele ser estático por categoría)
+                
+                # 2. Guardar usando la lógica de alineación por categoría
+                df_to_save = df_base[~df_base['Categoria'].isin(["📊 SALDO MES", "📈 SALDO ACUMULADO"])].copy()
                 df_full = cargar_presupuesto(cargar_categorias())
                 df_full.set_index('Categoria', inplace=True)
+                df_to_save.set_index('Categoria', inplace=True)
+                df_full.update(df_to_save)
+                df_full.reset_index(inplace=True)
                 
-                # Aplicamos cambios fila por fila para mayor seguridad
-                # Nota: df_budget_edited no es accesible aquí directo si el widget no ha terminado, 
-                # así que usamos una mezcla de lógica o el valor que devuelve el editor
-                # Pero en Streamlit, el valor devuelto por el widget se actualiza después del callback.
-                # Sin embargo, podemos usar el estado de edición directo.
+                df_full.to_csv(PATH_PRESUPUESTO, index=False)
+                if dbx:
+                    dbx.upload_file(PATH_PRESUPUESTO, "/presupuesto.csv")
                 
-                # Para simplificar y asegurar consistencia, haremos que el botón de guardado 
-                # o el guardado automático use el dataframe actual que el editor ya actualizó internamente en el session_state
-                # Sin embargo, st.data_editor con on_change es más robusto si le pasamos la lógica
-                pass # Lógica implementada abajo para evitar redundancia
+                st.cache_data.clear()
+                # No llamar a rerun() aquí, Streamlit lo maneja tras el callback.
+                st.toast("✅ Presupuesto guardado")
 
-    # 1. Definir la función de guardado fuera del flujo de UI para que sea accesible
-    def aplicar_guardado(df_a_guardar):
-        df_to_save = df_a_guardar[~df_a_guardar['Categoria'].isin(["📊 SALDO MES", "📈 SALDO ACUMULADO"])].copy()
-        df_full = cargar_presupuesto(cargar_categorias())
-        df_full.set_index('Categoria', inplace=True)
-        df_to_save.set_index('Categoria', inplace=True)
-        df_full.update(df_to_save)
-        df_full.reset_index(inplace=True)
-        df_full.to_csv(PATH_PRESUPUESTO, index=False)
-        if dbx:
-            dbx.upload_file(PATH_PRESUPUESTO, "/presupuesto.csv")
-        st.cache_data.clear()
-
-    # Editor con Auto-save (Cambiamos lógica: Guardamos si el valor del editor cambia)
+    # Editor con on_change para estabilidad
     h_editor = (len(df_budget_visual) + 1) * 35 + 45
     df_budget_edited = st.data_editor(
         df_budget_visual,
@@ -436,6 +437,7 @@ with tab_budget:
         use_container_width=True,
         height=h_editor,
         key=f"budget_editor_{anio_sel}",
+        on_change=on_budget_edit,
         column_config={
             "Categoria": st.column_config.TextColumn("Categoría", disabled=True),
             **{mes: st.column_config.NumberColumn(mes, format="$%d") for mes in cols_to_show if mes != "Categoria"}
@@ -443,12 +445,7 @@ with tab_budget:
         disabled=["Categoria"]
     )
     
-    # Manejar cambios: Si el DF editado es distinto al visual, guardamos
-    if not df_budget_edited.equals(df_budget_visual):
-        aplicar_guardado(df_budget_edited)
-        st.toast("✅ Cambios guardados")
-        # No llamamos a st.rerun() aquí para evitar el bucle. 
-        # Streamlit refrescará los componentes de abajo naturalmente.
+    # Eliminamos el bloque 'if not df_budget_edited.equals(df_budget_visual)' que causaba el bug
 
     # --- CÁLCULO DINÁMICO DE SALDOS (Después del editor) ---
     # Creamos un DF "al aire" que combina el original con los cambios del editor para el cálculo
@@ -629,43 +626,7 @@ with tab3:
     st.header("⚙️ Gestión de Categorías")
     st.write("Aquí puedes agregar, editar o eliminar las categorías disponibles.")
     
-    # --- DIAGNÓSTICO DROPBOX ---
-    st.divider()
-    st.subheader("🔑 Configuración de Conexión Permanente")
-    
-    if 'dropbox' not in st.secrets:
-        st.error("❌ No se encontró la sección `[dropbox]` en los secretos.")
-    else:
-        db_conf = st.secrets['dropbox']
-        has_refresh = 'refresh_token' in db_conf
-        has_keys = all(k in db_conf for k in ['app_key', 'app_secret'])
-        
-        if has_refresh and has_keys:
-            st.success("✅ **Conexión Permanente Activada**: El sistema se renovará solo.")
-        else:
-            st.warning("⚠️ **Conexión Temporal**: Tu token actual expirará pronto.")
-            st.write("Sigue estos pasos para activar la sincronización permanente:")
-            
-            with st.expander("📝 Guía Paso a Paso para obtener tu Refresh Token", expanded=not has_refresh):
-                st.markdown(f"""
-                1. **Copia tus llaves** desde el App Console de Dropbox a tus secretos:
-                   - `app_key` (está en la foto que enviaste)
-                   - `app_secret` (haz clic en 'Show' en la foto de Dropbox)
-                2. **Obtén tu código de autorización**:
-                   - Haz clic en este enlace: [Generar Código](https://www.dropbox.com/oauth2/authorize?client_id={db_conf.get('app_key', 'TU_APP_KEY')}&token_access_type=offline&response_type=code)
-                   - Autoriza la app y copia el código que te den.
-                3. **Genera el Refresh Token**: 
-                   - Como este es un proceso de un solo paso, una vez tengas el código, puedes obtener el token ejecutando este comando en una terminal (reemplazando los valores):
-                """)
-                st.code(f"""
-curl https://api.dropbox.com/oauth2/token \\
-    -d code=EL_CODIGO_QUE_COPIASTE \\
-    -d grant_type=authorization_code \\
-    -u {db_conf.get('app_key', 'TU_APP_KEY')}:{db_conf.get('app_secret', 'TU_APP_SECRET')}
-                """, language="bash")
-                st.markdown("4. **Guarda el `refresh_token`** que te devuelva el comando en tus secretos de Streamlit.")
-
-    st.divider()
+    st.write("Aquí puedes agregar, editar o eliminar las categorías disponibles.")
     # Load raw categories file for editing
     if os.path.exists(PATH_CAT):
         try:
