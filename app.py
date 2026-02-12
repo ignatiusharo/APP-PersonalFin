@@ -624,6 +624,38 @@ with tab2:
 
 with tab3:
     st.header("⚙️ Gestión de Categorías")
+    
+    # --- DIAGNÓSTICO DE ROBUSTEZ (Dropbox) ---
+    if 'dropbox' in st.secrets:
+        db_conf = st.secrets['dropbox']
+        # Verificamos si tiene la configuración robusta (Refresh Token)
+        es_permanente = all(k in db_conf for k in ['refresh_token', 'app_key', 'app_secret'])
+        
+        if es_permanente:
+            st.success("✔️ **Conexión Robusta Activada**: Dropbox se renovará solo para siempre.")
+        else:
+            st.warning("⚠️ **Conexión Frágil**: Estás usando un pase temporal. Se cortará solo pronto.")
+            
+            with st.expander("🛡️ ACTIVAR SOLUCIÓN ROBUSTA (Paso Único)", expanded=True):
+                st.info("Para que no tengas que entrar más a Dropbox manualmente, obtén tu llave permanente:")
+                
+                # Usar llaves si existen, si no, placeholders
+                ak = db_conf.get('app_key', 'TU_APP_KEY')
+                as_ = db_conf.get('app_secret', 'TU_APP_SECRET')
+                
+                st.markdown(f"""
+                1. **Generar Código**: Haz clic en [este enlace](https://www.dropbox.com/oauth2/authorize?client_id={ak}&token_access_type=offline&response_type=code) y copia el código que te den.
+                2. **Obtener Llave Permanente**: Ejecuta este comando en una terminal (o pídemelo a mí pasándome el código):
+                   ```bash
+                   curl https://api.dropbox.com/oauth2/token \\
+                       -d code=TU_CODIGO_AQUI \\
+                       -d grant_type=authorization_code \\
+                       -u {ak}:{as_}
+                   ```
+                3. **Guardar en Secretos**: El comando te dará un `refresh_token`. Guárdalo en Streamlit y **nunca más** verás este mensaje.
+                """)
+    
+    st.divider()
     st.write("Aquí puedes agregar, editar o eliminar las categorías disponibles.")
     
     # Load raw categories file for editing
