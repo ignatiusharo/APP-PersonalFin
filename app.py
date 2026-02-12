@@ -388,26 +388,42 @@ with tab_budget:
     # --- VISTA DEL EDITOR (Primero) ---
     df_budget_visual = df_budget_display.copy()
 
-    # Función para Guardado Seguro Autonómo
-    def guardar_presupuesto_seguro(df_editado):
-        # Filtrar el DF editado para quitar las filas de Saldo antes de guardar
-        df_to_save = df_editado[~df_editado['Categoria'].isin(["📊 SALDO MES", "📈 SALDO ACUMULADO"])].copy()
-        
-        # --- FIX: Guardado seguro alineando por Categoria ---
+    # Función Callback para Guardado Automático mediante on_change
+    def cb_guardar_presupuesto():
+        # Streamlit pone los cambios en session_state bajo la key del widget
+        state_key = f"budget_editor_{anio_sel}"
+        if state_key in st.session_state:
+            cambios = st.session_state[state_key]
+            if cambios["edited_rows"] or cambios["added_rows"] or cambios["deleted_rows"]:
+                # Cargamos el full para no perder otros años
+                df_full = cargar_presupuesto(cargar_categorias())
+                df_full.set_index('Categoria', inplace=True)
+                
+                # Aplicamos cambios fila por fila para mayor seguridad
+                # Nota: df_budget_edited no es accesible aquí directo si el widget no ha terminado, 
+                # así que usamos una mezcla de lógica o el valor que devuelve el editor
+                # Pero en Streamlit, el valor devuelto por el widget se actualiza después del callback.
+                # Sin embargo, podemos usar el estado de edición directo.
+                
+                # Para simplificar y asegurar consistencia, haremos que el botón de guardado 
+                # o el guardado automático use el dataframe actual que el editor ya actualizó internamente en el session_state
+                # Sin embargo, st.data_editor con on_change es más robusto si le pasamos la lógica
+                pass # Lógica implementada abajo para evitar redundancia
+
+    # 1. Definir la función de guardado fuera del flujo de UI para que sea accesible
+    def aplicar_guardado(df_a_guardar):
+        df_to_save = df_a_guardar[~df_a_guardar['Categoria'].isin(["📊 SALDO MES", "📈 SALDO ACUMULADO"])].copy()
         df_full = cargar_presupuesto(cargar_categorias())
         df_full.set_index('Categoria', inplace=True)
         df_to_save.set_index('Categoria', inplace=True)
         df_full.update(df_to_save)
         df_full.reset_index(inplace=True)
-        
         df_full.to_csv(PATH_PRESUPUESTO, index=False)
         if dbx:
             dbx.upload_file(PATH_PRESUPUESTO, "/presupuesto.csv")
         st.cache_data.clear()
-        st.rerun() # Forzar sincronización completa
 
-    # Editor con Auto-save
-    # Altura dinámica: ~35px por fila + cabecera
+    # Editor con Auto-save (Cambiamos lógica: Guardamos si el valor del editor cambia)
     h_editor = (len(df_budget_visual) + 1) * 35 + 45
     df_budget_edited = st.data_editor(
         df_budget_visual,
@@ -422,12 +438,12 @@ with tab_budget:
         disabled=["Categoria"]
     )
     
-    # Manejar cambios automáticamente
-    if f"budget_editor_{anio_sel}" in st.session_state:
-        state = st.session_state[f"budget_editor_{anio_sel}"]
-        if state["edited_rows"] or state["added_rows"] or state["deleted_rows"]:
-            guardar_presupuesto_seguro(df_budget_edited)
-            st.toast("✅ Cambios guardados automáticamente")
+    # Manejar cambios: Si el DF editado es distinto al visual, guardamos
+    if not df_budget_edited.equals(df_budget_visual):
+        aplicar_guardado(df_budget_edited)
+        st.toast("✅ Cambios guardados")
+        # No llamamos a st.rerun() aquí para evitar el bucle. 
+        # Streamlit refrescará los componentes de abajo naturalmente.
 
     # --- CÁLCULO DINÁMICO DE SALDOS (Después del editor) ---
     # Creamos un DF "al aire" que combina el original con los cambios del editor para el cálculo
