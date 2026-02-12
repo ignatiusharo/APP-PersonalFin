@@ -277,51 +277,48 @@ with tab_home:
             for col in ['Monto_Abs', 'Presupuesto', 'Diferencia']:
                 df_display_comparativo[col] = df_display_comparativo[col].apply(formatear_monto)
 
-            # Layout: 3/4 para la tabla, 1/4 para el gráfico
-            col_tabla, col_graf = st.columns([2.5, 1])
-
-            with col_tabla:
-                st.subheader("Detalle del Mes")
-                if not gastos_comparativo.empty:
-                    # Calcular altura dinámica para evitar scroll (aproximadamente 35px por fila)
-                    h_dinamico = (len(gastos_comparativo_con_total) + 1) * 35 + 40
-                    st.dataframe(
-                        df_display_comparativo[['Categoria', 'Monto_Abs', 'Presupuesto', 'Diferencia']],
-                        column_config={
-                            "Categoria": st.column_config.TextColumn("Categoría"),
-                            "Monto_Abs": st.column_config.TextColumn("Real"),
-                            "Presupuesto": st.column_config.TextColumn("Meta"),
-                            "Diferencia": st.column_config.TextColumn("Dif"),
-                        },
-                        hide_index=True,
-                        use_container_width=True,
-                        height=min(h_dinamico, 1000)
-                    )
+            # Visualización: Tabla primero, luego Gráfico debajo
+            st.subheader("Detalle del Mes")
+            if not gastos_comparativo.empty:
+                # Calcular altura dinámica para evitar scroll
+                h_dinamico = (len(gastos_comparativo_con_total) + 1) * 35 + 40
+                st.dataframe(
+                    df_display_comparativo[['Categoria', 'Monto_Abs', 'Presupuesto', 'Diferencia']],
+                    column_config={
+                        "Categoria": st.column_config.TextColumn("Categoría"),
+                        "Monto_Abs": st.column_config.TextColumn("Real"),
+                        "Presupuesto": st.column_config.TextColumn("Meta"),
+                        "Diferencia": st.column_config.TextColumn("Dif"),
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                    height=min(h_dinamico, 1000)
+                )
             
-            with col_graf:
-                st.subheader("Resumen por Tipo")
-                resumen_tipo = gastos_comparativo.groupby('Tipo_Cat').agg({'Monto_Abs': 'sum', 'Presupuesto': 'sum'}).reset_index()
+            st.divider()
+            
+            # Gráfico debajo, centrado o a buen ancho
+            st.subheader("Resumen por Tipo (Visual)")
+            resumen_tipo = gastos_comparativo.groupby('Tipo_Cat').agg({'Monto_Abs': 'sum', 'Presupuesto': 'sum'}).reset_index()
+            
+            if not resumen_tipo.empty:
+                df_chart = resumen_tipo.melt(
+                    id_vars='Tipo_Cat', 
+                    value_vars=['Monto_Abs', 'Presupuesto'], 
+                    var_name='Dato', 
+                    value_name='Monto'
+                )
+                df_chart['Dato'] = df_chart['Dato'].replace({'Monto_Abs': 'Real', 'Presupuesto': 'Meta'})
                 
-                if not resumen_tipo.empty:
-                    df_chart = resumen_tipo.melt(
-                        id_vars='Tipo_Cat', 
-                        value_vars=['Monto_Abs', 'Presupuesto'], 
-                        var_name='Tipo_Dato', 
-                        value_name='Monto'
-                    )
-                    df_chart['Tipo_Dato'] = df_chart['Tipo_Dato'].replace({'Monto_Abs': 'Real', 'Presupuesto': 'Meta'})
-                    
-                    chart = alt.Chart(df_chart).mark_bar().encode(
-                        x=alt.X('Tipo_Dato:N', title=None),
-                        y=alt.Y('Monto:Q', title='Monto ($)'),
-                        color=alt.Color('Tipo_Dato:N', scale=alt.Scale(domain=['Real', 'Meta'], range=['#ff4b4b', '#1f77b4'])),
-                        column=alt.Column('Tipo_Cat:N', header=alt.Header(title=None, labelAngle=0)),
-                        tooltip=['Tipo_Cat', 'Tipo_Dato', alt.Tooltip('Monto', format='$,.0f')]
-                    ).properties(width=80, height=200)
-                    
-                    st.altair_chart(chart, use_container_width=False)
-                else:
-                    st.info("No hay datos.")
+                chart = alt.Chart(df_chart).mark_bar().encode(
+                    x=alt.X('Dato:N', title=None),
+                    y=alt.Y('Monto:Q', title='Monto ($)'),
+                    color=alt.Color('Dato:N', title='Referencia', scale=alt.Scale(domain=['Real', 'Meta'], range=['#ff4b4b', '#1f77b4'])),
+                    column=alt.Column('Tipo_Cat:N', header=alt.Header(title=None, labelAngle=0)),
+                    tooltip=['Tipo_Cat', 'Dato', alt.Tooltip('Monto', format='$,.0f')]
+                ).properties(width=120, height=250)
+                
+                st.altair_chart(chart, use_container_width=False)
     else:
         st.info("No hay datos cargados aún.")
 
