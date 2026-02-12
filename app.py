@@ -30,6 +30,16 @@ if 'dropbox' in st.secrets:
 else:
     dbx = None
 
+# --- AUTO SYNC GLOBAL (Al inicio) ---
+if dbx and "last_sync" not in st.session_state:
+    try:
+        ok1, msg1 = dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
+        ok2, msg2 = dbx.download_file("/categorias.csv", PATH_CAT)
+        ok3, msg3 = dbx.download_file("/presupuesto.csv", PATH_PRESUPUESTO)
+        st.session_state["last_sync"] = "Success"
+    except Exception as e:
+        st.session_state["last_sync"] = f"Error: {str(e)}"
+
 
 # --- FUNCIONES DE APOYO ---
 def formatear_monto(monto):
@@ -68,11 +78,13 @@ def cargar_categorias():
     return ["Alimentación", "Transporte", "Vivienda", "Ocio", "Suscripciones", "Pendiente"]
 
 def cargar_presupuesto(categorias_actuales):
-    """Carga o inicializa el presupuesto"""
-    # Inicializar desde Enero del año actual hasta Diciembre del próximo año para asegurar cobertura
+    """Carga o inicializa el presupuesto y sincroniza categorías"""
     year_current = datetime.now().year
     start_date = datetime(year_current, 1, 1)
     meses_init = pd.period_range(start=start_date, periods=24, freq='M').strftime('%Y-%m').tolist()
+    
+    # Asegurar que categorias_actuales no tenga espacios y sea única
+    categorias_actuales = [c.strip() for c in categorias_actuales if c.strip()]
     
     if os.path.exists(PATH_PRESUPUESTO):
         try:
@@ -82,26 +94,40 @@ def cargar_presupuesto(categorias_actuales):
     else:
         df = pd.DataFrame(columns=['Categoria'])
     
-    # Sincronizar categorías: 
-    # 1. Asegurar que todas la categorias actuales existan en el presupuesto
-    cat_existentes = set(df['Categoria'].tolist()) if 'Categoria' in df.columns else set()
+    # 1. Asegurar columna Categoria y limpiar espacios
+    if 'Categoria' not in df.columns:
+        df['Categoria'] = []
+    df['Categoria'] = df['Categoria'].astype(str).str.strip()
+    
+    # 2. Sincronizar categorías: Añadir faltantes
+    cat_existentes = set(df['Categoria'].tolist())
     nuevas_cat = [c for c in categorias_actuales if c not in cat_existentes and c != "Pendiente"]
     
+    hay_cambios = False
     if nuevas_cat:
         df_new = pd.DataFrame({'Categoria': nuevas_cat})
         df = pd.concat([df, df_new], ignore_index=True)
+        hay_cambios = True
     
-    # 2. Asegurar columnas de meses (al menos los próximos 12)
+    # 3. Eliminar categorías que ya no existen en la configuración (Opcional, pero recomendado para coherencia)
+    # Por ahora solo añadimos para no borrar datos históricos por accidente.
+    
+    # 4. Asegurar columnas de meses
     for mes in meses_init:
         if mes not in df.columns:
             df[mes] = 0
+            hay_cambios = True
             
-    # Llenar NaNs con 0
     df = df.fillna(0)
     
-    # Ordenar columnas: Categoria primero, luego meses ordenados
+    # Ordenar
     cols_meses = sorted([c for c in df.columns if c != 'Categoria'])
     df = df[['Categoria'] + cols_meses]
+    
+    # 5. GUARDADO PROACTIVO: Si hubo categorías nuevas o meses nuevos, guardamos localmente
+    if hay_cambios:
+        df.to_csv(PATH_PRESUPUESTO, index=False)
+        # No subimos a Dropbox aquí para evitar bucles, se sube al editar o en el sync global siguiente
     
     return df
 
@@ -485,33 +511,6 @@ with tab1:
 
 with tab2:
     st.header("Listado de Movimientos")
-    
-    # --- AUTO SYNC ---
-    if dbx and "last_sync" not in st.session_state:
-        with st.status("🔍 Sincronizando con Dropbox...", expanded=True) as status:
-            ok1, msg1 = dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
-            ok2, msg2 = dbx.download_file("/categorias.csv", PATH_CAT)
-            
-            if ok1 or ok2:
-                st.session_state["last_sync"] = "Success"
-                status.update(label="✅ Sincronización completada", state="complete", expanded=False)
-                st.rerun()
-            else:
-                st.session_state["last_sync"] = f"Error: {msg1} | {msg2}"
-                status.update(label="❌ Error en la sincronización", state="error", expanded=True)
-                st.error(f"No se pudieron descargar los archivos: {msg1}")
-                if st.button("Reintentar Sincronización"):
-                    del st.session_state["last_sync"]
-                    st.rerun()
-
-    if "last_sync" in st.session_state and "Error" in str(st.session_state["last_sync"]):
-         st.warning(f"⚠️ Nota de Sincronización: {st.session_state['last_sync']}")
-         if st.button("🔄 Forzar Reintento"):
-            del st.session_state["last_sync"]
-            st.rerun()
-
-    df_cat = cargar_datos()
-    lista_categorias = cargar_categorias()
     
     df_cat = cargar_datos()
     lista_categorias = cargar_categorias()
