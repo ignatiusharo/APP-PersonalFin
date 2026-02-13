@@ -53,17 +53,23 @@ def cargar_datos():
     if os.path.exists(PATH_BANCO):
         try:
             return pd.read_csv(PATH_BANCO)
-        except pd.errors.EmptyDataError:
-            return pd.DataFrame(columns=['Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria'])
         except (pd.errors.EmptyDataError, pd.errors.ParserError):
+            st.warning("⚠️ El archivo de movimientos está vacío o corrupto. Se inicializará uno nuevo.")
+            return pd.DataFrame(columns=['Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria'])
+        except Exception as e:
+            st.error(f"Error cargando datos: {str(e)}")
             return pd.DataFrame(columns=['Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria'])
     return pd.DataFrame(columns=['Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria'])
 
 def cargar_categorias():
+    default_cats = ["Alimentación", "Transporte", "Vivienda", "Ocio", "Suscripciones", "Pendiente"]
     if os.path.exists(PATH_CAT):
         try:
             # Use python engine for robustness
             df = pd.read_csv(PATH_CAT, engine='python', sep=',', on_bad_lines='skip')
+            if df.empty:
+                st.warning("⚠️ El archivo de categorías está vacío. Usando categorías por defecto.")
+                return default_cats
             # Normalizamos nombres de columnas para ser flexibles con espacios y acentos
             df.columns = df.columns.str.strip()
             # Buscamos una columna que contenga "categor" (ej: Categoria, Categoría, CATEGORIA)
@@ -72,10 +78,9 @@ def cargar_categorias():
                 categorias = df[col_cat[0]].dropna().unique().tolist()
                 if categorias:
                     return categorias
-        except (pd.errors.ParserError, Exception) as e:
-            st.error(f"Error cargando categorías: {str(e)}")
-            # pass
-    return ["Alimentación", "Transporte", "Vivienda", "Ocio", "Suscripciones", "Pendiente"]
+        except (pd.errors.EmptyDataError, pd.errors.ParserError, Exception) as e:
+            st.warning(f"⚠️ No se pudo cargar categorías (archivo vacío o error). Usando por defecto.")
+    return default_cats
 
 def cargar_presupuesto(categorias_actuales):
     """Carga o inicializa el presupuesto y sincroniza categorías"""
@@ -89,7 +94,9 @@ def cargar_presupuesto(categorias_actuales):
     if os.path.exists(PATH_PRESUPUESTO):
         try:
             df = pd.read_csv(PATH_PRESUPUESTO)
-        except:
+            if df.empty:
+                df = pd.DataFrame(columns=['Categoria'])
+        except (pd.errors.EmptyDataError, Exception):
             df = pd.DataFrame(columns=['Categoria'])
     else:
         df = pd.DataFrame(columns=['Categoria'])
@@ -255,8 +262,15 @@ with tab_home:
             
             # Preparar datos por Tipo/Orden
             if os.path.exists(PATH_CAT):
-                df_cat_map = pd.read_csv(PATH_CAT, engine='python')
-                tipo_map = dict(zip(df_cat_map['Categoria'], df_cat_map['Tipo']))
+                try:
+                    df_cat_map = pd.read_csv(PATH_CAT, engine='python')
+                    if not df_cat_map.empty:
+                        tipo_map = dict(zip(df_cat_map['Categoria'], df_cat_map['Tipo']))
+                    else:
+                        tipo_map = {}
+                except pd.errors.EmptyDataError:
+                    tipo_map = {}
+                    st.warning("⚠️ Sin datos de categorías para mapear tipos.")
             else:
                 tipo_map = {}
             
@@ -531,15 +545,22 @@ with tab1:
                 df_unificado = pd.concat([df_hist, df_nuevo]).drop_duplicates(
                     subset=['Fecha', 'Detalle', 'Monto'], keep='first'
                 )
-                df_unificado.to_csv(PATH_BANCO, index=False)
-                st.balloons()
-                st.success(f"Sincronizado: {len(df_nuevo)} registros procesados.")
-                
-                # Auto Backup
-                if dbx:
-                    ok, msg = dbx.upload_file(PATH_BANCO, "/base_cc_santander.csv")
-                    if ok: st.toast("☁️ Respaldo en Dropbox actualizado")
-                    else: st.error(f"Error respaldo: {msg}")
+                if df_unificado.empty:
+                    st.error("❌ El resultado de la unificación está vacío. No se guardará.")
+                else:
+                    df_unificado.to_csv(PATH_BANCO, index=False)
+                    st.balloons()
+                    st.success(f"Sincronizado: {len(df_nuevo)} registros procesados.")
+                    
+                    # Auto Backup
+                    if dbx:
+                        # Verificación de tamaño antes de subir
+                        if os.path.getsize(PATH_BANCO) > 0:
+                            ok, msg = dbx.upload_file(PATH_BANCO, "/base_cc_santander.csv")
+                            if ok: st.toast("☁️ Respaldo en Dropbox actualizado")
+                            else: st.error(f"Error respaldo: {msg}")
+                        else:
+                            st.error("❌ El archivo local está vacío. Sincronización con Dropbox abortada.")
 
 with tab2:
     st.header("Listado de Movimientos")
@@ -616,16 +637,22 @@ with tab2:
             # Actualizamos el dataframe original con los cambios del editor basándonos en el índice
             df_cat.update(df_editado)
             
-            # Guardamos localmente
-            df_cat.to_csv(PATH_BANCO, index=False)
-            st.success("✅ Cambios guardados localmente.")
-            
-            # Auto Backup - Upload a Dropbox
-            if dbx:
-                with st.spinner("Subiendo respaldo a Dropbox..."):
-                    ok, msg = dbx.upload_file(PATH_BANCO, "/base_cc_santander.csv")
-                    if ok: st.toast("☁️ Respaldo en Dropbox actualizado", icon="☁️")
-                    else: st.error(f"Error respaldo: {msg}")
+            if df_cat.empty:
+                st.error("❌ No hay datos para guardar.")
+            else:
+                # Guardamos localmente
+                df_cat.to_csv(PATH_BANCO, index=False)
+                st.success("✅ Cambios guardados localmente.")
+                
+                # Auto Backup - Upload a Dropbox
+                if dbx:
+                    if os.path.getsize(PATH_BANCO) > 0:
+                        with st.spinner("Subiendo respaldo a Dropbox..."):
+                            ok, msg = dbx.upload_file(PATH_BANCO, "/base_cc_santander.csv")
+                            if ok: st.toast("☁️ Respaldo en Dropbox actualizado", icon="☁️")
+                            else: st.error(f"Error respaldo: {msg}")
+                    else:
+                        st.error("❌ Archivo local vacío. No se subirá a Dropbox.")
             
             st.cache_data.clear()
             st.rerun()
@@ -693,15 +720,21 @@ refresh_token = "DEJAR_VACIO_POR_AHORA"
     )
     
     if st.button("Guardar Cambios en Categorías"):
-        # Save locally
-        df_cat_edited.to_csv(PATH_CAT, index=False)
-        st.success("✅ Categorías actualizadas localmente")
-        
-        # Sync to Dropbox
-        if dbx:
-            ok, msg = dbx.upload_file(PATH_CAT, "/categorias.csv")
-            if ok: st.toast("☁️ Categorías sincronizadas con Dropbox", icon="☁️")
-            else: st.error(f"Error al sincronizar categorías: {msg}")
+        if df_cat_edited.empty:
+            st.error("❌ No puedes dejar la lista de categorías vacía.")
+        else:
+            # Save locally
+            df_cat_edited.to_csv(PATH_CAT, index=False)
+            st.success("✅ Categorías actualizadas localmente")
+            
+            # Sync to Dropbox
+            if dbx:
+                if os.path.getsize(PATH_CAT) > 0:
+                    ok, msg = dbx.upload_file(PATH_CAT, "/categorias.csv")
+                    if ok: st.toast("☁️ Categorías sincronizadas con Dropbox", icon="☁️")
+                    else: st.error(f"Error al sincronizar categorías: {msg}")
+                else:
+                    st.error("❌ El archivo de categorías está vacío. No se sincronizará.")
         
         # Clear cache to reflect changes immediately in other tabs
         st.cache_data.clear()
