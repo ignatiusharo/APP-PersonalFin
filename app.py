@@ -54,14 +54,18 @@ def cargar_datos():
     if os.path.exists(PATH_BANCO):
         try:
             df = pd.read_csv(PATH_BANCO)
-            # Normalización PROACTIVA
             if not df.empty:
+                # Normalización ROBUSTA de Monto (quitar $ y puntos/comas si vienen como string)
+                if df['Monto'].dtype == object:
+                    df['Monto'] = df['Monto'].astype(str).str.replace('$', '', regex=False).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
                 df['Monto'] = pd.to_numeric(df['Monto'], errors='coerce').fillna(0)
+                
+                # Normalización AGRESIVA de Categoría (quitar todo tipo de espacios)
                 if 'Categoria' in df.columns:
-                    df['Categoria'] = df['Categoria'].astype(str).str.strip()
+                    df['Categoria'] = df['Categoria'].astype(str).replace(r'\s+', ' ', regex=True).str.strip()
             return df
         except (pd.errors.EmptyDataError, pd.errors.ParserError):
-            st.warning("⚠️ El archivo de movimientos está vacío o corrupto. Se inicializará uno nuevo.")
+            st.warning("⚠️ El archivo de movimientos está vacío o corrupto.")
             return pd.DataFrame(columns=cols_base)
         except Exception as e:
             st.error(f"Error cargando datos: {str(e)}")
@@ -81,8 +85,8 @@ def cargar_categorias():
             # Buscamos una columna que contenga "categor"
             col_cat = [c for c in df.columns if 'categor' in c.lower()]
             if col_cat:
-                # NORMALIZACIÓN: strip() a todas las categorías
-                categorias = df[col_cat[0]].astype(str).str.strip().unique().tolist()
+                # NORMALIZACIÓN AGRESIVA
+                categorias = df[col_cat[0]].astype(str).replace(r'\s+', ' ', regex=True).str.strip().unique().tolist()
                 categorias = [c for c in categorias if c and c.lower() != 'nan']
                 if categorias:
                     return categorias
@@ -112,7 +116,7 @@ def cargar_presupuesto(categorias_actuales):
     # 1. Asegurar columna Categoria y limpiar espacios
     if 'Categoria' not in df.columns:
         df['Categoria'] = []
-    df['Categoria'] = df['Categoria'].astype(str).str.strip()
+    df['Categoria'] = df['Categoria'].astype(str).replace(r'\s+', ' ', regex=True).str.strip()
     
     # 2. Sincronizar categorías: 
     # A. Añadir faltantes
@@ -287,14 +291,15 @@ with tab_home:
             
             # Preparar datos agrupados (Incluimos todo: ingresos y gastos)
             df_movs = df_mes.copy()
-            df_movs['Categoria'] = df_movs['Categoria'].str.strip() # Limpieza extra
+            # Limpieza AGRESIVA antes de agrupar
+            df_movs['Categoria'] = df_movs['Categoria'].astype(str).replace(r'\s+', ' ', regex=True).str.strip()
             df_movs['Monto_Abs'] = df_movs['Monto'].abs()
             movimientos_real = df_movs.groupby('Categoria')['Monto_Abs'].sum().reset_index()
             
             # Merge con Presupuesto
             if mes_sel in df_presupuesto.columns:
                 presup_mes = df_presupuesto[['Categoria', mes_sel]].rename(columns={mes_sel: 'Presupuesto'})
-                presup_mes['Categoria'] = presup_mes['Categoria'].str.strip()
+                presup_mes['Categoria'] = presup_mes['Categoria'].astype(str).replace(r'\s+', ' ', regex=True).str.strip()
                 gastos_comparativo = pd.merge(movimientos_real, presup_mes, on='Categoria', how='outer').fillna(0)
             else:
                 gastos_comparativo = movimientos_real.copy()
@@ -304,7 +309,7 @@ with tab_home:
             gastos_comparativo = gastos_comparativo[(gastos_comparativo['Monto_Abs'] > 0) | (gastos_comparativo['Presupuesto'] > 0)]
             
             # Asignar tipos para aplicar lógica de diferencia diferenciada
-            # Aseguramos que tipo_map esté limpio
+            # Aseguramos que tipo_map esté limpio de forma agresiva
             tipo_map_clean = {str(k).strip(): v for k, v in tipo_map.items()}
             gastos_comparativo['Tipo_Cat'] = gastos_comparativo['Categoria'].apply(lambda x: tipo_map_clean.get(x, 'Otros'))
 
