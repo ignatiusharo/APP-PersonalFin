@@ -277,25 +277,35 @@ with tab_home:
             # Orden de tipos: Ingresos (1), Pendientes (2), Gastos fijos (3), Gastos Variables (4)
             orden_tipos = {"Ingresos": 1, "Pendiente": 2, "Gastos fijos": 3, "Gastos Variables": 4}
             
-            # Preparar datos agrupados
-            df_gastos = df_mes[df_mes['Monto'] < 0].copy()
-            df_gastos['Monto_Abs'] = df_gastos['Monto'].abs()
-            gastos_real = df_gastos.groupby('Categoria')['Monto_Abs'].sum().reset_index()
+            # Preparar datos agrupados (Incluimos todo: ingresos y gastos)
+            df_movs = df_mes.copy()
+            df_movs['Monto_Abs'] = df_movs['Monto'].abs()
+            movimientos_real = df_movs.groupby('Categoria')['Monto_Abs'].sum().reset_index()
             
             # Merge con Presupuesto
             if mes_sel in df_presupuesto.columns:
                 presup_mes = df_presupuesto[['Categoria', mes_sel]].rename(columns={mes_sel: 'Presupuesto'})
-                gastos_comparativo = pd.merge(gastos_real, presup_mes, on='Categoria', how='outer').fillna(0)
+                gastos_comparativo = pd.merge(movimientos_real, presup_mes, on='Categoria', how='outer').fillna(0)
             else:
-                gastos_comparativo = gastos_real.copy()
+                gastos_comparativo = movimientos_real.copy()
                 gastos_comparativo['Presupuesto'] = 0
             
             # Filtramos solo aquellos que tengan movimiento o presupuesto
             gastos_comparativo = gastos_comparativo[(gastos_comparativo['Monto_Abs'] > 0) | (gastos_comparativo['Presupuesto'] > 0)]
-            gastos_comparativo['Diferencia'] = gastos_comparativo['Presupuesto'] - gastos_comparativo['Monto_Abs']
             
-            # Asignar tipos y orden
+            # Asignar tipos para aplicar lógica de diferencia diferenciada
             gastos_comparativo['Tipo_Cat'] = gastos_comparativo['Categoria'].apply(lambda x: tipo_map.get(x, 'Otros'))
+
+            # Lógica de Diferencia:
+            # - Si es Ingresos: Real - Meta (Positivo si ganaste más, negativo rojo si ganaste menos)
+            # - Si es Gasto (u otro): Meta - Real (Positivo si gastaste menos, negativo rojo si gastaste más)
+            def calcular_diferencia(row):
+                if row['Tipo_Cat'] == 'Ingresos':
+                    return row['Monto_Abs'] - row['Presupuesto']
+                else:
+                    return row['Presupuesto'] - row['Monto_Abs']
+
+            gastos_comparativo['Diferencia'] = gastos_comparativo.apply(calcular_diferencia, axis=1)
             gastos_comparativo['Orden'] = gastos_comparativo['Tipo_Cat'].apply(lambda x: orden_tipos.get(x, 99))
             
             # Ordenar: primero por Tipo (Orden) y luego por Monto
@@ -303,7 +313,7 @@ with tab_home:
             
             # Añadir Fila de TOTAL (Ingresos - Gastos)
             # Diferenciar ingresos para suma positiva, el resto resta
-            gastos_real_con_tipo = pd.merge(gastos_real, df_cat_map[['Categoria', 'Tipo']], on='Categoria', how='left')
+            gastos_real_con_tipo = pd.merge(movimientos_real, df_cat_map[['Categoria', 'Tipo']], on='Categoria', how='left')
             
             sum_ingresos_real = gastos_real_con_tipo[gastos_real_con_tipo['Tipo'] == 'Ingresos']['Monto_Abs'].sum()
             sum_gastos_real = gastos_real_con_tipo[gastos_real_con_tipo['Tipo'] != 'Ingresos']['Monto_Abs'].sum()
