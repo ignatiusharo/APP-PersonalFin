@@ -50,16 +50,23 @@ def formatear_monto(monto):
         return str(monto)
 
 def cargar_datos():
+    cols_base = ['Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria']
     if os.path.exists(PATH_BANCO):
         try:
-            return pd.read_csv(PATH_BANCO)
+            df = pd.read_csv(PATH_BANCO)
+            # Normalización PROACTIVA
+            if not df.empty:
+                df['Monto'] = pd.to_numeric(df['Monto'], errors='coerce').fillna(0)
+                if 'Categoria' in df.columns:
+                    df['Categoria'] = df['Categoria'].astype(str).str.strip()
+            return df
         except (pd.errors.EmptyDataError, pd.errors.ParserError):
             st.warning("⚠️ El archivo de movimientos está vacío o corrupto. Se inicializará uno nuevo.")
-            return pd.DataFrame(columns=['Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria'])
+            return pd.DataFrame(columns=cols_base)
         except Exception as e:
             st.error(f"Error cargando datos: {str(e)}")
-            return pd.DataFrame(columns=['Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria'])
-    return pd.DataFrame(columns=['Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria'])
+            return pd.DataFrame(columns=cols_base)
+    return pd.DataFrame(columns=cols_base)
 
 def cargar_categorias():
     default_cats = ["Alimentación", "Transporte", "Vivienda", "Ocio", "Suscripciones", "Pendiente"]
@@ -68,18 +75,19 @@ def cargar_categorias():
             # Use python engine for robustness
             df = pd.read_csv(PATH_CAT, engine='python', sep=',', on_bad_lines='skip')
             if df.empty:
-                st.warning("⚠️ El archivo de categorías está vacío. Usando categorías por defecto.")
                 return default_cats
-            # Normalizamos nombres de columnas para ser flexibles con espacios y acentos
+            # Normalizamos nombres de columnas
             df.columns = df.columns.str.strip()
-            # Buscamos una columna que contenga "categor" (ej: Categoria, Categoría, CATEGORIA)
+            # Buscamos una columna que contenga "categor"
             col_cat = [c for c in df.columns if 'categor' in c.lower()]
             if col_cat:
-                categorias = df[col_cat[0]].dropna().unique().tolist()
+                # NORMALIZACIÓN: strip() a todas las categorías
+                categorias = df[col_cat[0]].astype(str).str.strip().unique().tolist()
+                categorias = [c for c in categorias if c and c.lower() != 'nan']
                 if categorias:
                     return categorias
-        except (pd.errors.EmptyDataError, pd.errors.ParserError, Exception) as e:
-            st.warning(f"⚠️ No se pudo cargar categorías (archivo vacío o error). Usando por defecto.")
+        except:
+            pass
     return default_cats
 
 def cargar_presupuesto(categorias_actuales):
@@ -279,12 +287,14 @@ with tab_home:
             
             # Preparar datos agrupados (Incluimos todo: ingresos y gastos)
             df_movs = df_mes.copy()
+            df_movs['Categoria'] = df_movs['Categoria'].str.strip() # Limpieza extra
             df_movs['Monto_Abs'] = df_movs['Monto'].abs()
             movimientos_real = df_movs.groupby('Categoria')['Monto_Abs'].sum().reset_index()
             
             # Merge con Presupuesto
             if mes_sel in df_presupuesto.columns:
                 presup_mes = df_presupuesto[['Categoria', mes_sel]].rename(columns={mes_sel: 'Presupuesto'})
+                presup_mes['Categoria'] = presup_mes['Categoria'].str.strip()
                 gastos_comparativo = pd.merge(movimientos_real, presup_mes, on='Categoria', how='outer').fillna(0)
             else:
                 gastos_comparativo = movimientos_real.copy()
@@ -294,7 +304,9 @@ with tab_home:
             gastos_comparativo = gastos_comparativo[(gastos_comparativo['Monto_Abs'] > 0) | (gastos_comparativo['Presupuesto'] > 0)]
             
             # Asignar tipos para aplicar lógica de diferencia diferenciada
-            gastos_comparativo['Tipo_Cat'] = gastos_comparativo['Categoria'].apply(lambda x: tipo_map.get(x, 'Otros'))
+            # Aseguramos que tipo_map esté limpio
+            tipo_map_clean = {str(k).strip(): v for k, v in tipo_map.items()}
+            gastos_comparativo['Tipo_Cat'] = gastos_comparativo['Categoria'].apply(lambda x: tipo_map_clean.get(x, 'Otros'))
 
             # Lógica de Diferencia:
             # - Si es Ingresos: Real - Meta (Positivo si ganaste más, negativo rojo si ganaste menos)
@@ -448,10 +460,16 @@ with tab_budget:
                 # Manejar agregados/borrados si fuera necesario (aunque presupuesto suele ser estático por categoría)
                 
                 # 2. Guardar usando la lógica de alineación por categoría
+                # NORMALIZACIÓN: Forzar strip() en ambos
                 df_to_save = df_base[~df_base['Categoria'].isin(["📊 SALDO MES", "📈 SALDO ACUMULADO"])].copy()
+                df_to_save['Categoria'] = df_to_save['Categoria'].astype(str).str.strip()
+                
                 df_full = cargar_presupuesto(cargar_categorias())
-                df_full.set_index('Categoria', inplace=True)
+                df_full['Categoria'] = df_full['Categoria'].astype(str).str.strip()
+                
                 df_to_save.set_index('Categoria', inplace=True)
+                df_full.set_index('Categoria', inplace=True)
+                
                 df_full.update(df_to_save)
                 df_full.reset_index(inplace=True)
                 
@@ -644,8 +662,13 @@ with tab2:
         )
         
         if st.button("💾 Guardar Cambios Finales", type="primary"):
-            # Actualizamos el dataframe original con los cambios del editor basándonos en el índice
+            # Normalización antes de guardar
+            df_editado['Categoria'] = df_editado['Categoria'].astype(str).str.strip()
+            # Actualizamos el dataframe original
             df_cat.update(df_editado)
+             # Limpieza final del original por si acaso
+            df_cat['Categoria'] = df_cat['Categoria'].astype(str).str.strip()
+            df_cat['Monto'] = pd.to_numeric(df_cat['Monto'], errors='coerce').fillna(0)
             
             if df_cat.empty:
                 st.error("❌ No hay datos para guardar.")
@@ -733,6 +756,8 @@ refresh_token = "DEJAR_VACIO_POR_AHORA"
         if df_cat_edited.empty:
             st.error("❌ No puedes dejar la lista de categorías vacía.")
         else:
+            # NORMALIZACIÓN antes de guardar
+            df_cat_edited['Categoria'] = df_cat_edited['Categoria'].astype(str).str.strip()
             # Save locally
             df_cat_edited.to_csv(PATH_CAT, index=False)
             st.success("✅ Categorías actualizadas localmente")
