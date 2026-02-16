@@ -240,6 +240,15 @@ with tab_home:
         col_filtro, col_vacio = st.columns([1, 3])
         with col_filtro:
             mes_sel = st.selectbox("Seleccionar Mes Contable", meses_disp)
+            
+        # --- PANEL DE DEBUG (Relocalizado para visibilidad) ---
+        with st.expander("🔍 Debug de Datos (Cruce Dashboard)"):
+            if mes_sel:
+                df_mes_debug = df_raw[df_raw['Mes_Contable'] == mes_sel]
+                st.write(f"Datos crudos para {mes_sel}:", df_mes_debug[['Fecha', 'Detalle', 'Monto', 'Categoria']])
+                st.write("Categorías únicas en este mes:", df_mes_debug['Categoria'].unique().tolist())
+            else:
+                st.write("Selecciona un mes para ver el debug.")
         
         if mes_sel:
             # Filtrar datos del mes seleccionado
@@ -277,14 +286,23 @@ with tab_home:
                 try:
                     df_cat_map = pd.read_csv(PATH_CAT, engine='python')
                     if not df_cat_map.empty:
-                        # Normalización AGRESIVA de la fuente maestro
-                        df_cat_map['Categoria'] = df_cat_map['Categoria'].astype(str).replace(r'\s+', ' ', regex=True).str.strip()
-                        tipo_map = dict(zip(df_cat_map['Categoria'], df_cat_map['Tipo']))
+                        # Buscamos columnas de forma flexible (Categoria/Categoría/etc)
+                        col_cat_name = [c for c in df_cat_map.columns if 'categor' in c.lower()]
+                        col_tipo_name = [c for c in df_cat_map.columns if 'tipo' in c.lower()]
+                        
+                        if col_cat_name and col_tipo_name:
+                            # Normalización AGRESIVA de la fuente maestro
+                            df_cat_map[col_cat_name[0]] = df_cat_map[col_cat_name[0]].astype(str).replace(r'\s+', ' ', regex=True).str.strip()
+                            # Renombramos internamente para el merge
+                            df_cat_map = df_cat_map.rename(columns={col_cat_name[0]: 'Categoria', col_tipo_name[0]: 'Tipo'})
+                            tipo_map = dict(zip(df_cat_map['Categoria'], df_cat_map['Tipo']))
+                        else:
+                            tipo_map = {}
                     else:
                         tipo_map = {}
-                except pd.errors.EmptyDataError:
+                except Exception as e:
                     tipo_map = {}
-                    st.warning("⚠️ Sin datos de categorías para mapear tipos.")
+                    st.warning(f"⚠️ Error al mapear tipos de categorías: {e}")
             else:
                 tipo_map = {}
             
@@ -345,12 +363,6 @@ with tab_home:
             total_presup_balance = sum_ingresos_presup - sum_gastos_presup
             
             total_dif_balance = total_presup_balance - total_real_balance
-            
-            # --- PANEL DE DEBUG (Temporal) ---
-            with st.expander("🔍 Debug de Datos (Cruce Dashboard)"):
-                st.write("Categorías en Movimientos Reales:", movimientos_real['Categoria'].tolist())
-                st.write("Categorías en Presupuesto Mes:", presup_mes['Categoria'].tolist())
-                st.write("Cruce Real con Tipo:", gastos_real_con_tipo)
             
             fila_total = pd.DataFrame({
                 'Categoria': ['--- TOTAL ---'],
