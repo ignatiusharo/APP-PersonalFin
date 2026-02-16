@@ -277,6 +277,8 @@ with tab_home:
                 try:
                     df_cat_map = pd.read_csv(PATH_CAT, engine='python')
                     if not df_cat_map.empty:
+                        # Normalización AGRESIVA de la fuente maestro
+                        df_cat_map['Categoria'] = df_cat_map['Categoria'].astype(str).replace(r'\s+', ' ', regex=True).str.strip()
                         tipo_map = dict(zip(df_cat_map['Categoria'], df_cat_map['Tipo']))
                     else:
                         tipo_map = {}
@@ -330,6 +332,7 @@ with tab_home:
             
             # Añadir Fila de TOTAL (Ingresos - Gastos)
             # Diferenciar ingresos para suma positiva, el resto resta
+            # ASEGURAMOS que el cruce use categorías limpias
             gastos_real_con_tipo = pd.merge(movimientos_real, df_cat_map[['Categoria', 'Tipo']], on='Categoria', how='left')
             
             sum_ingresos_real = gastos_real_con_tipo[gastos_real_con_tipo['Tipo'] == 'Ingresos']['Monto_Abs'].sum()
@@ -342,6 +345,12 @@ with tab_home:
             total_presup_balance = sum_ingresos_presup - sum_gastos_presup
             
             total_dif_balance = total_presup_balance - total_real_balance
+            
+            # --- PANEL DE DEBUG (Temporal) ---
+            with st.expander("🔍 Debug de Datos (Cruce Dashboard)"):
+                st.write("Categorías en Movimientos Reales:", movimientos_real['Categoria'].tolist())
+                st.write("Categorías en Presupuesto Mes:", presup_mes['Categoria'].tolist())
+                st.write("Cruce Real con Tipo:", gastos_real_con_tipo)
             
             fila_total = pd.DataFrame({
                 'Categoria': ['--- TOTAL ---'],
@@ -433,6 +442,8 @@ with tab_budget:
     # Obtener Tipos de Categoría para Cálculos de Saldo
     if os.path.exists(PATH_CAT):
         df_cat_map = pd.read_csv(PATH_CAT, engine='python')
+        # Limpieza agresiva también aquí
+        df_cat_map['Categoria'] = df_cat_map['Categoria'].astype(str).replace(r'\s+', ' ', regex=True).str.strip()
         tipo_map = dict(zip(df_cat_map['Categoria'], df_cat_map['Tipo']))
     else:
         tipo_map = {}
