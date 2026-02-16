@@ -241,14 +241,26 @@ with tab_home:
         with col_filtro:
             mes_sel = st.selectbox("Seleccionar Mes Contable", meses_disp)
             
-        # --- PANEL DE DEBUG (Relocalizado para visibilidad) ---
-        with st.expander("🔍 Debug de Datos (Cruce Dashboard)"):
+        # --- SUPER DEBUG PANEL ---
+        with st.expander("🔍 SUPER DEBUG: Análisis de Datos"):
+            st.write("### 1. Resumen por Mes Contable (Todos los datos)")
+            resumen_meses = df_raw.groupby('Mes_Contable').agg(
+                Ingresos=('Monto', lambda x: x[x > 0].sum()),
+                Gastos=('Monto', lambda x: x[x < 0].sum()),
+                Count=('Monto', 'count')
+            ).reset_index()
+            st.dataframe(resumen_meses)
+            
             if mes_sel:
-                df_mes_debug = df_raw[df_raw['Mes_Contable'] == mes_sel]
-                st.write(f"Datos crudos para {mes_sel}:", df_mes_debug[['Fecha', 'Detalle', 'Monto', 'Categoria']])
-                st.write("Categorías únicas en este mes:", df_mes_debug['Categoria'].unique().tolist())
-            else:
-                st.write("Selecciona un mes para ver el debug.")
+                st.write(f"### 2. Detalle del mes {mes_sel}")
+                df_mes_debug = df_raw[df_raw['Mes_Contable'] == mes_sel].copy()
+                st.write(f"Total filas: {len(df_mes_debug)}")
+                st.write("Primeros 50 registros (Todos los campos):")
+                st.dataframe(df_mes_debug.head(50))
+                
+                st.write("Categorías detectadas en este mes y sus montos:")
+                cat_debug = df_mes_debug.groupby('Categoria')['Monto'].sum().reset_index()
+                st.dataframe(cat_debug)
         
         if mes_sel:
             # Filtrar datos del mes seleccionado
@@ -641,13 +653,12 @@ with tab2:
         with col1:
             ver_pendientes = st.toggle("🔍 Solo Pendientes", value=True)
         with col2:
-            # Filtro por Mes
-            df_cat_proc['Mes'] = df_cat_proc['Fecha_dt'].dt.strftime('%Y-%m')
-            meses_disponibles = sorted(df_cat_proc['Mes'].dropna().unique().tolist(), reverse=True)
-            mes_filtrado = st.selectbox("📅 Mes", ["Todos"] + meses_disponibles)
+            # Filtro por Mes (USANDO LÓGICA CONTABLE PARA CONSISTENCIA)
+            df_cat_proc['Mes_Contable'] = df_cat_proc['Fecha_dt'].apply(get_accounting_month)
+            meses_disponibles = sorted(df_cat_proc['Mes_Contable'].dropna().unique().tolist(), reverse=True)
+            mes_filtrado = st.selectbox("📅 Mes Contable", ["Todos"] + meses_disponibles)
         with col3:
             # Filtro por Categoría
-            # Si "Solo Pendientes" está ON, forzamos el filtro a Pendiente o lo deshabilitamos opcionalmente
             cat_filtrada = st.selectbox("🏷️ Categoría", ["Todas"] + lista_categorias, disabled=ver_pendientes)
         with col4:
              filtro_detalle = st.text_input("🔎 Buscar en Detalle", placeholder="Ej: Supermercado")
@@ -664,7 +675,7 @@ with tab2:
             df_display = df_display[df_display['Categoria'] == cat_filtrada]
             
         if mes_filtrado != "Todos":
-            df_display = df_display[df_display['Mes'] == mes_filtrado]
+            df_display = df_display[df_display['Mes_Contable'] == mes_filtrado]
 
         # Identificar duplicados visualmente
         df_display['Duplicado'] = df_display.duplicated(subset=['Fecha', 'Detalle', 'Monto'], keep=False)
