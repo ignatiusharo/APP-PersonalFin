@@ -49,6 +49,57 @@ def formatear_monto(monto):
     except:
         return str(monto)
 
+def Reparar_datos_existentes(df):
+    """Repara errores de parsing de fechas previos (ej: 12-02-2026 -> 2026-12-02)"""
+    if df.empty: return df
+    
+    # Buscamos registros en Diciembre 2026 que tengan día <= 12
+    # Estos son muy probablemente registros de meses anteriores (ej: Febrero) mal parseados
+    # También revisamos si Fecha_dt es NaT para intentar su parseo
+    if 'Fecha_dt' not in df.columns:
+        df['Fecha_dt'] = pd.to_datetime(df['Fecha'], dayfirst=True, errors='coerce')
+        
+    mask_error = (df['Fecha_dt'].dt.year == 2026) & (df['Fecha_dt'].dt.month == 12) & (df['Fecha_dt'].dt.day <= 12)
+    
+    if mask_error.any():
+        # Para estos casos, swapeamos el mes y el día
+        def fix_date(row):
+            try:
+                # El día real era el mes (12)? No, el mes error es 12. 
+                # El día error era el mes REAL (ej: 2).
+                # Entonces: Mes Real = antiguo día (row.Fecha_dt.day). Día Real = antiguo mes (12).
+                return row['Fecha_dt'].replace(month=row['Fecha_dt'].day, day=12)
+            except:
+                return row['Fecha_dt']
+        
+        df.loc[mask_error, 'Fecha_dt'] = df[mask_error].apply(fix_date, axis=1)
+        # Actualizamos el string de Fecha para persistencia estándar
+        df.loc[mask_error, 'Fecha'] = df.loc[mask_error, 'Fecha_dt'].dt.strftime('%d-%m-%Y')
+        
+    return df
+
+def normalizar_dataframe_import(df):
+    """Estandariza fechas y montos en el momento de la importación (Cartola)"""
+    if df.empty: return df
+    
+    # 1. Normalizar FECHAS a string DD-MM-YYYY
+    # Forzamos dayfirst=True para formato local cartolas
+    df['Fecha_tmp'] = pd.to_datetime(df['Fecha'], dayfirst=True, errors='coerce')
+    # Los que no pudieron, intentamos sin dayfirst (ISO)
+    fallidos = df['Fecha_tmp'].isna()
+    if fallidos.any():
+        df.loc[fallidos, 'Fecha_tmp'] = pd.to_datetime(df.loc[fallidos, 'Fecha'], errors='coerce')
+    
+    # Convertimos a string estándar DD-MM-YYYY para la base de datos (PATH_BANCO)
+    df['Fecha'] = df['Fecha_tmp'].dt.strftime('%d-%m-%Y')
+    
+    # 2. Normalizar MONTOS
+    if df['Monto'].dtype == object:
+        df['Monto'] = df['Monto'].astype(str).str.replace('$', '', regex=False).str.replace('.', '', regex=False).str.replace(',', '.', regex=False).str.replace('\xa0', '', regex=False).str.strip()
+    df['Monto'] = pd.to_numeric(df['Monto'], errors='coerce').fillna(0)
+    
+    return df.drop(columns=['Fecha_tmp'], errors='ignore')
+
 def cargar_datos():
     cols_base = ['Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria']
     if os.path.exists(PATH_BANCO):
@@ -66,12 +117,15 @@ def cargar_datos():
                 
                 # Normalización de Fechas (Detectar formato automáticamente para evitar NaT)
                 df['Fecha'] = df['Fecha'].astype(str).str.strip()
-                # Intentamos parseo primero sin dayfirst para ISO
-                df['Fecha_dt'] = pd.to_datetime(df['Fecha'], errors='coerce')
-                # Los que fallaron (NaT) probamos con dayfirst=True
+                # Intentamos parseo PRIORIZANDO dayfirst=True para consistencia con Chile
+                df['Fecha_dt'] = pd.to_datetime(df['Fecha'], dayfirst=True, errors='coerce')
+                # Los que fallaron (NaT) probamos estándar (ISO)
                 fallidos = df['Fecha_dt'].isna()
                 if fallidos.any():
-                    df.loc[fallidos, 'Fecha_dt'] = pd.to_datetime(df.loc[fallidos, 'Fecha'], dayfirst=True, errors='coerce')
+                    df.loc[fallidos, 'Fecha_dt'] = pd.to_datetime(df.loc[fallidos, 'Fecha'], errors='coerce')
+                
+                # --- REPARACIÓN DE DATOS (Solo si detecta el error del mes 12) ---
+                df = Reparar_datos_existentes(df)
                 
                 return df
         except (pd.errors.EmptyDataError, pd.errors.ParserError):
@@ -195,6 +249,8 @@ def procesar_archivo(archivo):
                 df_final.columns = ['Fecha', 'Detalle', 'Monto']
                 df_final['Banco'] = 'CC Santander'
                 df_final['Categoria'] = 'Pendiente'
+                # Normalización INMEDIATA al detectar
+                df_final = normalizar_dataframe_import(df_final)
                 st.success(f"✅ Santander detectado: Cuenta {CUENTA_PROPIA}")
                 return df_final
             
@@ -206,8 +262,10 @@ def procesar_archivo(archivo):
             if columnas_req.issubset(df.columns):
                 df['Banco'] = 'Genérico'
                 df['Categoria'] = 'Pendiente'
+                # Normalización INMEDIATA
+                df = normalizar_dataframe_import(df[list(columnas_req) + ['Banco', 'Categoria']])
                 st.success("✅ Archivo CSV estándar detectado")
-                return df[list(columnas_req) + ['Banco', 'Categoria']]
+                return df
         
         st.error("❌ Formato no reconocido o cuenta no autorizada.")
         return None
@@ -260,32 +318,21 @@ with tab_home:
                         st.session_state["last_sync"] = datetime.now().strftime("%H:%M:%S")
                         st.rerun()
             
-        # --- SUPER DEBUG PANEL ---
-        with st.expander("🔍 SUPER DEBUG: Análisis de Datos"):
-            st.write(f"**Archivo Local:** `{os.path.abspath(PATH_BANCO)}`")
-            st.write(f"**Tamaño:** {os.path.getsize(PATH_BANCO)} bytes")
-            st.write(f"**Filas totales en df_raw:** {len(df_raw)}")
+        # --- RESUMEN DE SALUD DE DATOS ---
+        with st.expander("📊 Estado de la Base de Datos"):
+            st.write(f"**Total de Registros:** {len(df_raw)}")
+            st.write(f"**Archivo Local:** `{PATH_BANCO}` ({os.path.getsize(PATH_BANCO)} bytes)")
             
-            st.write("### 1. Resumen por Mes Contable (Todos los datos)")
-            # Usar df_raw ya con Fecha_dt procesada en cargar_datos
-            resumen_meses = df_raw.groupby('Mes_Contable').agg(
-                Ingresos=('Monto', lambda x: x[x > 0].sum()),
-                Gastos=('Monto', lambda x: x[x < 0].sum()),
-                Count=('Monto', 'count')
-            ).reset_index()
-            st.dataframe(resumen_meses)
+            resumen_meses = df_raw.groupby('Mes_Contable').size().reset_index(name='Registros')
+            st.write("**Registros por Mes Contable:**")
+            st.dataframe(resumen_meses, use_container_width=True)
             
-            if mes_sel:
-                st.write(f"### 2. Detalle del mes {mes_sel}")
-                df_mes_debug = df_raw[df_raw['Mes_Contable'] == mes_sel].copy()
-                st.write(f"Total filas: {len(df_mes_debug)}")
-                st.write("Primeros 50 registros (Todos los campos):")
-                st.dataframe(df_mes_debug.head(50))
-                
-                st.write("Categorías detectadas en este mes y sus montos:")
-                cat_debug = df_mes_debug.groupby('Categoria')['Monto'].sum().reset_index()
-                st.dataframe(cat_debug)
-        
+            # Alerta si hay datos en meses muy lejanos (posible error de parsing remanente)
+            mes_actual = datetime.now().strftime('%Y-%m')
+            futuros = [m for m in resumen_meses['Mes_Contable'].tolist() if m > mes_actual and m != '2026-03'] # Permitimos un mes de margen
+            if futuros:
+                st.error(f"⚠️ ¡Atención! Hay registros en meses futuros: {futuros}. Esto indica errores de fecha.")
+
         if mes_sel:
             # Filtrar datos del mes seleccionado
             df_mes = df_raw[df_raw['Mes_Contable'] == mes_sel]
@@ -633,7 +680,7 @@ with tab1:
             
             if st.button("Confirmar e Insertar en Base de Datos"):
                 df_hist = cargar_datos()
-                # Unimos y eliminamos duplicados exactos
+                # Unimos y eliminamos duplicados exactos usando el string de fecha normalizado
                 df_unificado = pd.concat([df_hist, df_nuevo]).drop_duplicates(
                     subset=['Fecha', 'Detalle', 'Monto'], keep='first'
                 )
@@ -724,20 +771,21 @@ with tab2:
         )
         
         if st.button("💾 Guardar Cambios Finales", type="primary"):
-            # Normalización antes de guardar
+            # Normalización antes de guardar: Categorías y estandarización de FECHA
             df_editado['Categoria'] = df_editado['Categoria'].astype(str).str.strip()
+            
             # Actualizamos el dataframe original
             df_cat.update(df_editado)
-             # Limpieza final del original por si acaso
-            df_cat['Categoria'] = df_cat['Categoria'].astype(str).str.strip()
-            df_cat['Monto'] = pd.to_numeric(df_cat['Monto'], errors='coerce').fillna(0)
             
             if df_cat.empty:
                 st.error("❌ No hay datos para guardar.")
             else:
+                # NORMALIZACIÓN FINAL ANTES DE ESCRIBIR EL CSV (Asegurar DD-MM-YYYY)
+                df_cat = normalizar_dataframe_import(df_cat)
+                
                 # Guardamos localmente
                 df_cat.to_csv(PATH_BANCO, index=False)
-                st.success("✅ Cambios guardados localmente.")
+                st.success("✅ Cambios guardados localmente y datos normalizados.")
                 
                 # Auto Backup - Upload a Dropbox
                 if dbx:
