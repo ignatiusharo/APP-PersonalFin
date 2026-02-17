@@ -55,15 +55,25 @@ def cargar_datos():
         try:
             df = pd.read_csv(PATH_BANCO)
             if not df.empty:
-                # Normalización ROBUSTA de Monto (quitar $ y puntos/comas si vienen como string)
+                # Normalización ROBUSTA de Monto
                 if df['Monto'].dtype == object:
-                    df['Monto'] = df['Monto'].astype(str).str.replace('$', '', regex=False).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
+                    df['Monto'] = df['Monto'].astype(str).str.replace('$', '', regex=False).str.replace('.', '', regex=False).str.replace(',', '.', regex=False).str.replace('\xa0', '', regex=False).str.strip()
                 df['Monto'] = pd.to_numeric(df['Monto'], errors='coerce').fillna(0)
                 
-                # Normalización AGRESIVA de Categoría (quitar todo tipo de espacios)
+                # Normalización AGRESIVA de Categoría
                 if 'Categoria' in df.columns:
                     df['Categoria'] = df['Categoria'].astype(str).replace(r'\s+', ' ', regex=True).str.strip()
-            return df
+                
+                # Normalización de Fechas (Detectar formato automáticamente para evitar NaT)
+                df['Fecha'] = df['Fecha'].astype(str).str.strip()
+                # Intentamos parseo primero sin dayfirst para ISO
+                df['Fecha_dt'] = pd.to_datetime(df['Fecha'], errors='coerce')
+                # Los que fallaron (NaT) probamos con dayfirst=True
+                fallidos = df['Fecha_dt'].isna()
+                if fallidos.any():
+                    df.loc[fallidos, 'Fecha_dt'] = pd.to_datetime(df.loc[fallidos, 'Fecha'], dayfirst=True, errors='coerce')
+                
+                return df
         except (pd.errors.EmptyDataError, pd.errors.ParserError):
             st.warning("⚠️ El archivo de movimientos está vacío o corrupto.")
             return pd.DataFrame(columns=cols_base)
@@ -231,19 +241,33 @@ with tab_home:
     df_presupuesto = cargar_presupuesto(cargar_categorias())
     
     if not df_raw.empty:
-        # Calcular Mes Contable
-        df_raw['Fecha_dt'] = pd.to_datetime(df_raw['Fecha'], dayfirst=True, errors='coerce')
+        # Mes Contable (Ya tenemos Fecha_dt desde cargar_datos)
         df_raw['Mes_Contable'] = df_raw['Fecha_dt'].apply(get_accounting_month)
         
         # Filtro de Mes
         meses_disp = sorted(df_raw['Mes_Contable'].dropna().unique().tolist(), reverse=True)
-        col_filtro, col_vacio = st.columns([1, 3])
+        col_filtro, col_sync, col_vacio = st.columns([1, 1, 2])
         with col_filtro:
             mes_sel = st.selectbox("Seleccionar Mes Contable", meses_disp)
+        with col_sync:
+            if st.button("🔄 Forzar Sincro Dropbox"):
+                st.cache_data.clear()
+                if dbx:
+                    with st.spinner("Descargando de Dropbox..."):
+                        dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
+                        dbx.download_file("/categorias.csv", PATH_CAT)
+                        dbx.download_file("/presupuesto.csv", PATH_PRESUPUESTO)
+                        st.session_state["last_sync"] = datetime.now().strftime("%H:%M:%S")
+                        st.rerun()
             
         # --- SUPER DEBUG PANEL ---
         with st.expander("🔍 SUPER DEBUG: Análisis de Datos"):
+            st.write(f"**Archivo Local:** `{os.path.abspath(PATH_BANCO)}`")
+            st.write(f"**Tamaño:** {os.path.getsize(PATH_BANCO)} bytes")
+            st.write(f"**Filas totales en df_raw:** {len(df_raw)}")
+            
             st.write("### 1. Resumen por Mes Contable (Todos los datos)")
+            # Usar df_raw ya con Fecha_dt procesada en cargar_datos
             resumen_meses = df_raw.groupby('Mes_Contable').agg(
                 Ingresos=('Monto', lambda x: x[x > 0].sum()),
                 Gastos=('Monto', lambda x: x[x < 0].sum()),
@@ -644,9 +668,8 @@ with tab2:
         else:
             st.success("✅ ¡Felicidades! Todo está conciliado.")
 
-        # Asegurar formato de fecha para filtrado
+        # Asegurar formato de fecha para filtrado (Ya lo tenemos corregido en cargar_datos)
         df_cat_proc = df_cat.copy()
-        df_cat_proc['Fecha_dt'] = pd.to_datetime(df_cat_proc['Fecha'], dayfirst=True, errors='coerce')
         
         # Filtros
         col1, col2, col3, col4 = st.columns([1, 1.2, 1.2, 1.5])
