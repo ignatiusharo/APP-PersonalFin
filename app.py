@@ -8,8 +8,31 @@ from utils.dropbox_client import DropboxManager
 from utils.date_utils import get_accounting_month
 
 # --- SUPABASE CONFIG ---
-SUPABASE_URL = st.secrets["supabase"]["url"]
-SUPABASE_KEY = st.secrets["supabase"]["key"]
+# Usamos un bloque try/except o .get() para evitar crashes en el arranque
+try:
+    SUPABASE_URL = st.secrets.get("supabase", {}).get("url", "")
+    SUPABASE_KEY = st.secrets.get("supabase", {}).get("key", "")
+except Exception:
+    SUPABASE_URL = ""
+    SUPABASE_KEY = ""
+
+# Guard de configuración crítica
+if not SUPABASE_URL or not SUPABASE_KEY:
+    st.error("⚠️ **Configuración de Supabase no detectada.**")
+    st.info("""
+    Para que la aplicación funcione en la nube, debes configurar los **Secrets** en Streamlit Cloud:
+    1. Ve a tu dashboard de Streamlit Cloud.
+    2. Entra en **Settings > Secrets**.
+    3. Pega lo siguiente (con tus llaves reales):
+    
+    ```toml
+    [supabase]
+    url = "https://tu-url.supabase.co"
+    key = "tu-anon-key"
+    api_secret = "tu-service-role-key"
+    ```
+    """)
+    st.stop()
 
 class SupabaseDB:
     def __init__(self, url, key):
