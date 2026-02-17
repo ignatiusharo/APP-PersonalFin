@@ -685,7 +685,7 @@ with tab2:
 
         # Editor de datos - El índice se mantiene para poder actualizar el original
         # Removemos columnas técnicas del editor
-        df_editor_input = df_display.drop(columns=['Duplicado', 'Mes', 'Fecha_dt'])
+        df_editor_input = df_display.drop(columns=['Duplicado', 'Mes_Contable', 'Fecha_dt'])
         
         df_editado = st.data_editor(
             df_editor_input,
