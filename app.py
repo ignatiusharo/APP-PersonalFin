@@ -321,11 +321,15 @@ with tab_home:
                 st.cache_data.clear()
                 if dbx:
                     with st.spinner("Descargando de Dropbox..."):
-                        dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
-                        dbx.download_file("/categorias.csv", PATH_CAT)
-                        dbx.download_file("/presupuesto.csv", PATH_PRESUPUESTO)
-                        st.session_state["last_sync"] = datetime.now().strftime("%H:%M:%S")
-                        st.rerun()
+                        ok, msg = dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
+                        if ok:
+                            dbx.download_file("/categorias.csv", PATH_CAT)
+                            dbx.download_file("/presupuesto.csv", PATH_PRESUPUESTO)
+                            st.session_state["last_sync"] = datetime.now().strftime("%H:%M:%S")
+                            st.success("✅ Datos sincronizados correctamente.")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Error en la descarga: {msg}")
             
         # --- RESUMEN DE SALUD DE DATOS ---
         with st.expander("📊 Estado de la Base de Datos"):
@@ -549,11 +553,14 @@ with tab_home:
             if st.button("📥 RESTAURAR TODO DESDE DROPBOX", type="primary"):
                 with st.spinner("Descargando base de datos maestra..."):
                     st.cache_data.clear()
-                    dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
-                    dbx.download_file("/categorias.csv", PATH_CAT)
-                    dbx.download_file("/presupuesto.csv", PATH_PRESUPUESTO)
-                    st.success("✅ Base de datos restaurada correctamente.")
-                    st.rerun()
+                    ok, msg = dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
+                    if ok:
+                        dbx.download_file("/categorias.csv", PATH_CAT)
+                        dbx.download_file("/presupuesto.csv", PATH_PRESUPUESTO)
+                        st.success("✅ Base de datos restaurada correctamente.")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Falló la restauración: {msg}")
         else:
             st.info("Ve a la pestaña 'Cargar Cartola' para subir tus primeros movimientos.")
 
