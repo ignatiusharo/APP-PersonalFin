@@ -348,16 +348,29 @@ with tab_home:
                 presupuesto_total = df_presupuesto[mes_sel].sum() 
             
             col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("Ingresos Reales", formatear_monto(total_ingresos))
+            
+            # Ingresos Reales con desglose Conciliado vs Pendiente
+            df_reconciliado = df_mes[df_mes['Categoria'] != 'Pendiente']
+            df_pendiente = df_mes[df_mes['Categoria'] == 'Pendiente']
+            
+            ingr_conciliado = df_reconciliado[df_reconciliado['Monto'] > 0]['Monto'].sum()
+            ingr_pendiente = df_pendiente[df_pendiente['Monto'] > 0]['Monto'].sum()
+            
+            # El KPI principal muestra el total, el detalle abajo el desglose
+            col_m1.metric("Ingresos Reales (Total)", formatear_monto(total_ingresos))
+            col_m1.caption(f"✅ Conciliado: {formatear_monto(ingr_conciliado)}")
+            if ingr_pendiente > 0:
+                col_m1.caption(f"⏳ Pendiente: {formatear_monto(ingr_pendiente)}")
             
             # Métrica Gastos con Delta vs Presupuesto
             delta_presupuesto = None
             delta_color = "normal"
             if presupuesto_total > 0:
                 gastos_abs = abs(total_gastos)
+                # El presupuesto de gastos suele ser positivo, comparamos contra valor absoluto
                 diff = presupuesto_total - gastos_abs
                 delta_presupuesto = f"{formatear_monto(diff)} vs Presupuesto"
-                delta_color = "normal" if diff >= 0 else "inverse" # Verde si sobra, Rojo si falta
+                delta_color = "normal" if diff >= 0 else "inverse" # Verde si sobra (gastaste menos), Rojo si falta
                 
             col_m2.metric("Gastos Reales", formatear_monto(total_gastos), delta=delta_presupuesto, delta_color=delta_color)
             col_m3.metric("Balance", formatear_monto(balance))
@@ -432,15 +445,20 @@ with tab_home:
             gastos_comparativo = gastos_comparativo.sort_values(['Orden', 'Monto_Abs'], ascending=[True, False])
             
             # Añadir Fila de TOTAL (Ingresos - Gastos)
-            # Diferenciar ingresos para suma positiva, el resto resta
-            # ASEGURAMOS que el cruce use categorías limpias
+            # Aseguramos que el cruce use categorías limpias
             gastos_real_con_tipo = pd.merge(movimientos_real, df_cat_map[['Categoria', 'Tipo']], on='Categoria', how='left')
+            # Si no tiene tipo pero es 'Pendiente', le asignamos 'Pendiente'
+            mask_pend = (gastos_real_con_tipo['Tipo'].isna()) & (gastos_real_con_tipo['Categoria'] == 'Pendiente')
+            gastos_real_con_tipo.loc[mask_pend, 'Tipo'] = 'Pendiente'
             
-            sum_ingresos_real = gastos_real_con_tipo[gastos_real_con_tipo['Tipo'] == 'Ingresos']['Monto_Abs'].sum()
-            sum_gastos_real = gastos_real_con_tipo[gastos_real_con_tipo['Tipo'] != 'Ingresos']['Monto_Abs'].sum()
+            # Suma de Ingresos: Todo lo que sea tipo 'Ingresos' O que sea Pendiente con monto positivo
+            # En movimientos_real todos son positivos (Monto_Abs), así que discriminamos con df_mes
+            sum_ingresos_real = total_ingresos
+            sum_gastos_real = abs(total_gastos)
             total_real_balance = sum_ingresos_real - sum_gastos_real
             
             presup_con_tipo = pd.merge(presup_mes, df_cat_map[['Categoria', 'Tipo']], on='Categoria', how='left')
+            # El presupuesto de ingresos es positivo
             sum_ingresos_presup = presup_con_tipo[presup_con_tipo['Tipo'] == 'Ingresos']['Presupuesto'].sum()
             sum_gastos_presup = presup_con_tipo[presup_con_tipo['Tipo'] != 'Ingresos']['Presupuesto'].sum()
             total_presup_balance = sum_ingresos_presup - sum_gastos_presup
