@@ -293,7 +293,7 @@ def highlight_duplicates(df):
 
 # --- INTERFAZ ---
 st.title("💰 Conciliador Bancario Inteligente")
-st.caption("v2.2.2 - Pure Cloud (Fix Permanente)")
+st.caption("v2.2.3 - Cloud Native (Final Fix)")
 
 # Intentar cargar datos reales (Sobrescribe las inicializaciones si hay éxito)
 try:
@@ -399,6 +399,7 @@ with tab_home:
                 presup_mes['Categoria'] = presup_mes['Categoria'].astype(str).replace(r'\s+', ' ', regex=True).str.strip()
                 gastos_comparativo = pd.merge(movimientos_real, presup_mes, on='Categoria', how='outer').fillna(0)
             else:
+                presup_mes = pd.DataFrame(columns=['Categoria', 'Presupuesto'])
                 gastos_comparativo = movimientos_real.copy()
                 gastos_comparativo['Presupuesto'] = 0
             
