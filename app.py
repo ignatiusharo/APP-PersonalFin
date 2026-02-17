@@ -6,6 +6,11 @@ from datetime import datetime
 import altair as alt # Importamos altair
 from utils.date_utils import get_accounting_month
 
+# --- GLOBAL INITIALIZATION (Garantiza que las variables existan para evitar NameError) ---
+df_cat_map = pd.DataFrame(columns=['Categoria', 'Tipo', 'Agrupador'])
+df_raw = pd.DataFrame(columns=['id', 'Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria', 'status', 'period'])
+df_presupuesto = pd.DataFrame()
+
 # --- SUPABASE CONFIG ---
 # Usamos un bloque try/except o .get() para evitar crashes en el arranque
 try:
@@ -288,12 +293,15 @@ def highlight_duplicates(df):
 
 # --- INTERFAZ ---
 st.title("💰 Conciliador Bancario Inteligente")
-st.caption("v2.2.1 - Cloud Native (Pure Supabase)")
+st.caption("v2.2.2 - Pure Cloud (Fix Permanente)")
 
-# Cargar Datos y Categorías Globalmente para todas las pestañas
-df_raw = cargar_datos()
-df_cat_map = cargar_categorias(full=True)
-df_presupuesto = cargar_presupuesto(cargar_categorias())
+# Intentar cargar datos reales (Sobrescribe las inicializaciones si hay éxito)
+try:
+    df_raw = cargar_datos()
+    df_cat_map = cargar_categorias(full=True)
+    df_presupuesto = cargar_presupuesto(cargar_categorias())
+except Exception as e:
+    st.error(f"❌ Error crítico al inicializar datos: {str(e)}")
 
 tab_home, tab_budget, tab1, tab2, tab3 = st.tabs(["🏠 Home / Resumen", "💰 Presupuesto", "📥 Cargar Cartola", "📊 Conciliación y Categorías", "⚙️ Configuración"])
 
