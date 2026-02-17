@@ -1,10 +1,69 @@
 import streamlit as st
 import pandas as pd
 import os
+import requests
 from datetime import datetime
 import altair as alt # Importamos altair
 from utils.dropbox_client import DropboxManager
 from utils.date_utils import get_accounting_month
+
+# --- SUPABASE CONFIG ---
+SUPABASE_URL = st.secrets["supabase"]["url"]
+SUPABASE_KEY = st.secrets["supabase"]["key"]
+
+class SupabaseDB:
+    def __init__(self, url, key):
+        self.url = url.rstrip('/') + "/rest/v1"
+        self.headers = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation"
+        }
+
+    def query(self, table, select="*", filters=None):
+        url = f"{self.url}/{table}?select={select}"
+        if filters:
+            for k, v in filters.items():
+                url += f"&{k}={v}"
+        try:
+            res = requests.get(url, headers=self.headers)
+            if res.status_code == 200:
+                return pd.DataFrame(res.json())
+            else:
+                st.error(f"Supabase Query Error ({res.status_code}): {res.text}")
+                return pd.DataFrame()
+        except Exception as e:
+            st.error(f"Supabase Connection Fatal Error: {str(e)}")
+            return pd.DataFrame()
+
+    def upsert(self, table, data, on_conflict="name"):
+        headers = self.headers.copy()
+        headers["Prefer"] = f"return=representation,resolution=merge-duplicates"
+        try:
+            res = requests.post(f"{self.url}/{table}", json=data, headers=headers)
+            return res.status_code in [200, 201], res.text
+        except Exception as e:
+            return False, str(e)
+
+    def insert(self, table, data):
+        try:
+            res = requests.post(f"{self.url}/{table}", json=data, headers=self.headers)
+            return res.status_code in [200, 201], res.text
+        except Exception as e:
+            return False, str(e)
+
+    def update(self, table, data, filters):
+        url = f"{self.url}/{table}"
+        if filters:
+            url += "?" + "&".join([f"{k}={v}" for k, v in filters.items()])
+        try:
+            res = requests.patch(url, json=data, headers=self.headers)
+            return res.status_code in [200, 204], res.text
+        except Exception as e:
+            return False, str(e)
+
+sdb = SupabaseDB(SUPABASE_URL, SUPABASE_KEY)
 
 # Configuración de página
 st.set_page_config(page_title="Mi Conciliador Pro", layout="wide")
@@ -31,15 +90,9 @@ else:
 # Variable global para estado de red
 dbx_ok, dbx_msg = (True, "OK") if not dbx else dbx.check_connection()
 
-# --- AUTO SYNC GLOBAL (Al inicio) ---
-if dbx and "last_sync" not in st.session_state:
-    try:
-        ok1, msg1 = dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
-        ok2, msg2 = dbx.download_file("/categorias.csv", PATH_CAT)
-        ok3, msg3 = dbx.download_file("/presupuesto.csv", PATH_PRESUPUESTO)
-        st.session_state["last_sync"] = "Success"
-    except Exception as e:
-        st.session_state["last_sync"] = f"Error: {str(e)}"
+# --- CLOUD SYNC STATUS ---
+if "last_sync" not in st.session_state:
+    st.session_state["last_sync"] = datetime.now().strftime("%H:%M:%S")
 
 
 # --- FUNCIONES DE APOYO ---
@@ -102,132 +155,61 @@ def normalizar_dataframe_import(df):
     return df.drop(columns=['Fecha_tmp'], errors='ignore')
 
 def cargar_datos():
-    cols_base = ['Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria']
-    if os.path.exists(PATH_BANCO):
-        # PROTECCIÓN: Si el archivo mide 0 bytes, es una descarga fallida anterior
-        if os.path.getsize(PATH_BANCO) == 0:
-            st.warning("⚠️ El archivo de datos está vacío (0 bytes).")
-            # Si hay Dropbox disponible, intentamos restauración automática silenciosa
-            if dbx:
-                dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
-        
-        try:
-            df = pd.read_csv(PATH_BANCO)
-            if df.empty:
-                return pd.DataFrame(columns=cols_base)
-            
-            # Normalización ROBUSTA de Monto
-                if df['Monto'].dtype == object:
-                    df['Monto'] = df['Monto'].astype(str).str.replace('$', '', regex=False).str.replace('.', '', regex=False).str.replace(',', '.', regex=False).str.replace('\xa0', '', regex=False).str.strip()
-                df['Monto'] = pd.to_numeric(df['Monto'], errors='coerce').fillna(0)
-                
-                # Normalización AGRESIVA de Categoría
-                if 'Categoria' in df.columns:
-                    df['Categoria'] = df['Categoria'].astype(str).replace(r'\s+', ' ', regex=True).str.strip()
-                
-                # Normalización de Fechas (Detectar formato automáticamente para evitar NaT)
-                df['Fecha'] = df['Fecha'].astype(str).str.strip()
-                # Intentamos parseo PRIORIZANDO dayfirst=True para consistencia con Chile
-                df['Fecha_dt'] = pd.to_datetime(df['Fecha'], dayfirst=True, errors='coerce')
-                # Los que fallaron (NaT) probamos estándar (ISO)
-                fallidos = df['Fecha_dt'].isna()
-                if fallidos.any():
-                    df.loc[fallidos, 'Fecha_dt'] = pd.to_datetime(df.loc[fallidos, 'Fecha'], errors='coerce')
-                
-                # --- REPARACIÓN DE DATOS (Solo si detecta el error del mes 12) ---
-                df = Reparar_datos_existentes(df)
-                
-                return df
-        except (pd.errors.EmptyDataError, pd.errors.ParserError):
-            st.error("⚠️ El archivo de movimientos está corrupto o vacío.")
-            return pd.DataFrame(columns=cols_base)
-        except Exception as e:
-            st.error(f"Error cargando datos: {str(e)}")
-            return pd.DataFrame(columns=cols_base)
-    return pd.DataFrame(columns=cols_base)
-
-def cargar_categorias():
-    default_cats = ["Alimentación", "Transporte", "Vivienda", "Ocio", "Suscripciones", "Pendiente"]
-    if os.path.exists(PATH_CAT):
-        try:
-            # Use python engine for robustness
-            df = pd.read_csv(PATH_CAT, engine='python', sep=',', on_bad_lines='skip')
-            if df.empty:
-                return default_cats
-            # Normalizamos nombres de columnas
-            df.columns = df.columns.str.strip()
-            # Buscamos una columna que contenga "categor"
-            col_cat = [c for c in df.columns if 'categor' in c.lower()]
-            if col_cat:
-                # NORMALIZACIÓN AGRESIVA
-                categorias = df[col_cat[0]].astype(str).replace(r'\s+', ' ', regex=True).str.strip().unique().tolist()
-                categorias = [c for c in categorias if c and c.lower() != 'nan']
-                if categorias:
-                    return categorias
-        except:
-            pass
-    return default_cats
-
-def cargar_presupuesto(categorias_actuales):
-    """Carga o inicializa el presupuesto y sincroniza categorías"""
-    year_current = datetime.now().year
-    start_date = datetime(year_current, 1, 1)
-    meses_init = pd.period_range(start=start_date, periods=24, freq='M').strftime('%Y-%m').tolist()
+    """Carga movimientos desde Supabase PostgreSQL (facts join categories)"""
+    # Usamos select con join a categories para traer el nombre
+    df = sdb.query("facts", select="*,categories(name)")
+    if df.empty:
+        return pd.DataFrame(columns=['id', 'Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria', 'status', 'period'])
     
-    # Asegurar que categorias_actuales no tenga espacios y sea única
-    categorias_actuales = [c.strip() for c in categorias_actuales if c.strip()]
+    # Normalización del layout para la app
+    df = df.rename(columns={
+        'date': 'Fecha',
+        'detail': 'Detalle',
+        'amount': 'Monto',
+        'bank': 'Banco'
+    })
     
-    if os.path.exists(PATH_PRESUPUESTO):
-        try:
-            df = pd.read_csv(PATH_PRESUPUESTO)
-            if df.empty:
-                df = pd.DataFrame(columns=['Categoria'])
-        except (pd.errors.EmptyDataError, Exception):
-            df = pd.DataFrame(columns=['Categoria'])
+    # Extraer el nombre de la categoría del objeto retornado por Supabase (join)
+    if 'categories' in df.columns:
+        df['Categoria'] = df['categories'].apply(lambda x: x.get('name') if isinstance(x, dict) else 'Pendiente')
     else:
-        df = pd.DataFrame(columns=['Categoria'])
-    
-    # 1. Asegurar columna Categoria y limpiar espacios
-    if 'Categoria' not in df.columns:
-        df['Categoria'] = []
-    df['Categoria'] = df['Categoria'].astype(str).replace(r'\s+', ' ', regex=True).str.strip()
-    
-    # 2. Sincronizar categorías: 
-    # A. Añadir faltantes
-    cat_existentes = set(df['Categoria'].tolist())
-    nuevas_cat = [c for c in categorias_actuales if c not in cat_existentes and c != "Pendiente"]
-    
-    hay_cambios = False
-    if nuevas_cat:
-        df_new = pd.DataFrame({'Categoria': nuevas_cat})
-        df = pd.concat([df, df_new], ignore_index=True)
-        hay_cambios = True
-
-    # B. ELIMINAR CATEGORÍAS SOBRANTES (Sincronización estricta)
-    # Solo dejamos las que están en la configuración actual (más "Pendiente" si aplica, aunque presupuesto no lo usa típicamente)
-    mask_keep = df['Categoria'].isin(categorias_actuales)
-    if not mask_keep.all():
-        df = df[mask_keep].copy()
-        hay_cambios = True
-    
-    # 3. Asegurar columnas de meses
-    for mes in meses_init:
-        if mes not in df.columns:
-            df[mes] = 0
-            hay_cambios = True
-            
-    df = df.fillna(0)
-    
-    # Ordenar
-    cols_meses = sorted([c for c in df.columns if c != 'Categoria'])
-    df = df[['Categoria'] + cols_meses]
-    
-    # 5. GUARDADO PROACTIVO: Si hubo categorías nuevas o meses nuevos, guardamos localmente
-    if hay_cambios:
-        df.to_csv(PATH_PRESUPUESTO, index=False)
-        # No subimos a Dropbox aquí para evitar bucles, se sube al editar o en el sync global siguiente
+        df['Categoria'] = 'Pendiente'
+        
+    # Asegurar tipos
+    df['Fecha_dt'] = pd.to_datetime(df['Fecha'], errors='coerce')
+    df['Monto'] = pd.to_numeric(df['Monto'], errors='coerce').fillna(0)
     
     return df
+
+def cargar_categorias():
+    """Obtiene lista de nombres de categorías desde Supabase"""
+    df = sdb.query("categories", select="name")
+    if not df.empty:
+        return sorted(df['name'].unique().tolist())
+    return ["Alimentación", "Transporte", "Vivienda", "Ocio", "Suscripciones", "Pendiente"]
+
+def cargar_presupuesto(lista_categorias):
+    """Carga presupuesto desde Supabase y lo pivota para la vista actual"""
+    df = sdb.query("budget", select="*,categories(name)")
+    
+    # Si está vacío, creamos un DF base con las categorías actuales
+    if df.empty:
+        df_pivot = pd.DataFrame({'Categoria': lista_categorias})
+    else:
+        # Extraer nombre
+        df['Categoria'] = df['categories'].apply(lambda x: x.get('name') if isinstance(x, dict) else 'Unknown')
+        # Pivotar: Index=Categoria, Columns=period, Values=amount
+        df_pivot = df.pivot(index='Categoria', columns='period', values='amount').reset_index().fillna(0)
+    
+    # Asegurar que todas las categorías existan en el presupuesto (Sincronización)
+    cat_existentes = set(df_pivot['Categoria'].tolist()) if not df_pivot.empty else set()
+    for cat in lista_categorias:
+        if cat not in cat_existentes:
+            nueva_fila = {col: 0 for col in df_pivot.columns}
+            nueva_fila['Categoria'] = cat
+            df_pivot = pd.concat([df_pivot, pd.DataFrame([nueva_fila])], ignore_index=True)
+            
+    return df_pivot
 
 
 def procesar_archivo(archivo):
@@ -327,19 +309,10 @@ with tab_home:
         with col_filtro:
             mes_sel = st.selectbox("Seleccionar Mes Contable", meses_disp)
         with col_sync:
-            if st.button("🔄 Forzar Sincro Dropbox"):
+            if st.button("🔄 Refrescar Datos de la Nube"):
                 st.cache_data.clear()
-                if dbx:
-                    with st.spinner("Descargando de Dropbox..."):
-                        ok, msg = dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
-                        if ok:
-                            dbx.download_file("/categorias.csv", PATH_CAT)
-                            dbx.download_file("/presupuesto.csv", PATH_PRESUPUESTO)
-                            st.session_state["last_sync"] = datetime.now().strftime("%H:%M:%S")
-                            st.success("✅ Datos sincronizados correctamente.")
-                            st.rerun()
-                        else:
-                            st.error(f"❌ Error en la descarga: {msg}")
+                st.session_state["last_sync"] = datetime.now().strftime("%H:%M:%S")
+                st.rerun()
             
         # --- RESUMEN DE SALUD DE DATOS ---
         with st.expander("📊 Estado de la Base de Datos"):
@@ -606,47 +579,42 @@ with tab_budget:
     # --- VISTA DEL EDITOR (Primero) ---
     df_budget_visual = df_budget_display.copy()
 
-    # Función Callback para Guardado Automático mediante on_change (ESTABLE)
+    # Función Callback para Guardado Automático
     def on_budget_edit():
         state_key = f"budget_editor_{anio_sel}"
         if state_key in st.session_state:
             cambios = st.session_state[state_key]
             if cambios["edited_rows"] or cambios["added_rows"] or cambios["deleted_rows"]:
-                # 1. Obtener el DataFrame actual del estado del widget (ya tiene los cambios aplicados)
-                # Nota: En un callback, st.session_state[key] contiene 'edited_rows', 'added_rows', etc.
-                # Pero no el DF final. Necesitamos aplicar los cambios manualmente al DF base.
-                
+                # 1. Obtener el DataFrame actual del estado del widget
                 df_base = df_budget_visual.copy()
-                
-                # Aplicar ediciones (Streamlit indices son enteros si no hay index definido)
                 for row_idx, changed_cols in cambios["edited_rows"].items():
                     idx = int(row_idx)
                     for col, val in changed_cols.items():
                         df_base.loc[idx, col] = val
                 
-                # Manejar agregados/borrados si fuera necesario (aunque presupuesto suele ser estático por categoría)
-                
-                # 2. Guardar usando la lógica de alineación por categoría
-                # NORMALIZACIÓN: Forzar strip() en ambos
+                # 2. Guardar usando Supabase
                 df_to_save = df_base[~df_base['Categoria'].isin(["📊 SALDO MES", "📈 SALDO ACUMULADO"])].copy()
-                df_to_save['Categoria'] = df_to_save['Categoria'].astype(str).str.strip()
                 
-                df_full = cargar_presupuesto(cargar_categorias())
-                df_full['Categoria'] = df_full['Categoria'].astype(str).str.strip()
+                # Obtener mapeo de categorías para obtener IDs
+                cats_db = sdb.query("categories", select="id,name")
+                cat_to_id = dict(zip(cats_db['name'], cats_db['id']))
                 
-                df_to_save.set_index('Categoria', inplace=True)
-                df_full.set_index('Categoria', inplace=True)
-                
-                df_full.update(df_to_save)
-                df_full.reset_index(inplace=True)
-                
-                df_full.to_csv(PATH_PRESUPUESTO, index=False)
-                if dbx:
-                    dbx.upload_file(PATH_PRESUPUESTO, "/presupuesto.csv")
+                for _, row in df_to_save.iterrows():
+                    cat_name = row['Categoria']
+                    cat_id = cat_to_id.get(cat_name)
+                    if not cat_id: continue
+                    
+                    for col in df_to_save.columns:
+                        if col == "Categoria": continue
+                        val = row[col]
+                        check = sdb.query("budget", filters={"category_id": f"eq.{cat_id}", "period": f"eq.{col}"})
+                        if not check.empty:
+                            sdb.update("budget", {"amount": val}, filters={"id": f"eq.{check.iloc[0]['id']}"})
+                        else:
+                            sdb.insert("budget", {"category_id": cat_id, "period": col, "amount": val})
                 
                 st.cache_data.clear()
-                # No llamar a rerun() aquí, Streamlit lo maneja tras el callback.
-                st.toast("✅ Presupuesto guardado")
+                st.toast("✅ Presupuesto guardado en la nube")
 
     # Editor con on_change para estabilidad
     h_editor = (len(df_budget_visual) + 1) * 35 + 45
@@ -735,27 +703,35 @@ with tab1:
             st.dataframe(df_nuevo.head())
             
             if st.button("Confirmar e Insertar en Base de Datos"):
-                df_hist = cargar_datos()
-                # Unimos y eliminamos duplicados exactos usando el string de fecha normalizado
-                df_unificado = pd.concat([df_hist, df_nuevo]).drop_duplicates(
-                    subset=['Fecha', 'Detalle', 'Monto'], keep='first'
-                )
-                if df_unificado.empty:
-                    st.error("❌ El resultado de la unificación está vacío. No se guardará.")
-                else:
-                    df_unificado.to_csv(PATH_BANCO, index=False)
-                    st.balloons()
-                    st.success(f"Sincronizado: {len(df_nuevo)} registros procesados.")
+                with st.spinner("Subiendo datos a la nube..."):
+                    # Obtener mapeo de categorías
+                    cats_db = sdb.query("categories", select="id,name")
+                    cat_to_id = dict(zip(cats_db['name'], cats_db['id']))
                     
-                    # Auto Backup
-                    if dbx:
-                        # Verificación de tamaño antes de subir
-                        if os.path.getsize(PATH_BANCO) > 0:
-                            ok, msg = dbx.upload_file(PATH_BANCO, "/base_cc_santander.csv")
-                            if ok: st.toast("☁️ Respaldo en Dropbox actualizado")
-                            else: st.error(f"Error respaldo: {msg}")
+                    data_to_insert = []
+                    for _, row in df_nuevo.iterrows():
+                        cat_name = row.get('Categoria', 'Pendiente')
+                        cat_id = cat_to_id.get(cat_name)
+                        
+                        # Estructura para Supabase
+                        data_to_insert.append({
+                            "date": row['Fecha_tmp'].strftime('%Y-%m-%d'),
+                            "period": get_accounting_month(row['Fecha_tmp']),
+                            "detail": row['Detalle'],
+                            "amount": row['Monto'],
+                            "bank": row['Banco'],
+                            "category_id": cat_id,
+                            "status": "Pendiente"
+                        })
+                    
+                    if data_to_insert:
+                        ok, msg = sdb.insert("facts", data_to_insert)
+                        if ok:
+                            st.balloons()
+                            st.success(f"✅ ¡Éxito! {len(data_to_insert)} movimientos subidos a la nube.")
+                            st.cache_data.clear()
                         else:
-                            st.error("❌ El archivo local está vacío. Sincronización con Dropbox abortada.")
+                            st.error(f"❌ Error al subir datos: {msg}")
 
 with tab2:
     st.header("Listado de Movimientos")
@@ -827,44 +803,39 @@ with tab2:
         )
         
         if st.button("💾 Guardar Cambios Finales", type="primary"):
-            # SAFEGUARD 1: No permitir guardar si df_editado tiene datos pero df_cat está vacío por error de carga
-            if df_cat.empty and not df_editado.empty:
-                st.error("❌ ERROR CRÍTICO: El motor de datos se cargó vacío. No se guardará para evitar pérdida de datos. Usa 'Restaurar de Dropbox'.")
-            else:
-                # Normalización antes de guardar: Categorías y estandarización de FECHA
-                df_editado['Categoria'] = df_editado['Categoria'].astype(str).str.strip()
+            with st.spinner("Actualizando base de datos central..."):
+                # Obtenemos mapeo de categorías
+                cats_db = sdb.query("categories", select="id,name")
+                cat_to_id = dict(zip(cats_db['name'], cats_db['id']))
                 
-                # Actualizamos el dataframe original
-                df_cat.update(df_editado)
+                # En el data_editor de Streamlit, editamos el DF filtrado.
+                # Pero df_editado tiene los valores actuales.
+                # Lo más eficiente es iterar sobre el editor y parchear por ID.
+                n_updates = 0
+                for idx, row in df_editado.iterrows():
+                    # Solo actualizamos si tiene ID (los nuevos se manejan distinto, pero aquí son solo cambios)
+                    if 'id' in row and not pd.isna(row['id']):
+                        cat_id = cat_to_id.get(row['Categoria'])
+                        payload = {
+                            "category_id": cat_id,
+                            "detail": row['Detalle'],
+                            "amount": row['Monto'],
+                            "status": "Conciliado" # Si lo editó en esta tabla, lo marcamos como conciliado
+                        }
+                        # Intentar parsear fecha si fue cambiada
+                        try:
+                            dt = pd.to_datetime(row['Fecha'], dayfirst=True)
+                            payload["date"] = dt.strftime('%Y-%m-%d')
+                            payload["period"] = get_accounting_month(dt)
+                        except:
+                            pass
+                        
+                        ok, _ = sdb.update("facts", payload, filters={"id": f"eq.{row['id']}"})
+                        if ok: n_updates += 1
                 
-                if df_cat.empty:
-                    st.error("❌ No hay datos para guardar.")
-                else:
-                    # NORMALIZACIÓN FINAL ANTES DE ESCRIBIR EL CSV (Asegurar DD-MM-YYYY)
-                    df_cat = normalizar_dataframe_import(df_cat)
-                    
-                    # ATOMIC PERSISTENCE: Crear backup antes de sobrescribir
-                    if os.path.exists(PATH_BANCO):
-                        import shutil
-                        shutil.copy2(PATH_BANCO, PATH_BANCO + ".bak")
-                    
-                    # Guardamos localmente
-                    df_cat.to_csv(PATH_BANCO, index=False)
-                    st.success("✅ Cambios guardados localmente y datos normalizados.")
-                    
-                    # Auto Backup - Upload a Dropbox
-                    if dbx:
-                        # SAFEGUARD 2: No subir a Dropbox si bajó drásticamente el peso del archivo (posible error)
-                        if os.path.getsize(PATH_BANCO) > 50: 
-                            with st.spinner("Subiendo respaldo a Dropbox..."):
-                                ok, msg = dbx.upload_file(PATH_BANCO, "/base_cc_santander.csv")
-                                if ok: st.toast("☁️ Respaldo en Dropbox actualizado", icon="☁️")
-                                else: st.error(f"Error respaldo: {msg}")
-                        else:
-                            st.error("❌ El archivo local es demasiado pequeño. Sincronización con Dropbox abortada por seguridad.")
-            
-            st.cache_data.clear()
-            st.rerun()
+                st.success(f"✅ Se actualizaron {n_updates} movimientos en la nube.")
+                st.cache_data.clear()
+                st.rerun()
     else:
         st.info("Bandeja de entrada vacía.")
         if dbx:
@@ -913,15 +884,24 @@ refresh_token = "DEJAR_VACIO_POR_AHORA"
     st.divider()
     st.write("Aquí puedes agregar, editar o eliminar las categorías disponibles.")
     
-    # Load raw categories file for editing
-    if os.path.exists(PATH_CAT):
-        try:
-            df_config_cat = pd.read_csv(PATH_CAT, engine='python', sep=',', on_bad_lines='skip')
-        except Exception as e:
-            st.error(f"⚠️ Error leyendo archivo de categorías: {e}")
-            df_config_cat = pd.DataFrame(columns=['Categoria', 'Tipo'])
-    else:
-        df_config_cat = pd.DataFrame(columns=['Categoria', 'Tipo'])
+    # Load categories from Supabase
+    with st.spinner("Cargando categorías..."):
+        df_config_cat = sdb.query("categories")
+    
+    if df_config_cat.empty:
+        st.info("💡 No se detectaron categorías en la base de datos. Puedes agregar la primera fila abajo.")
+        df_config_cat = pd.DataFrame(columns=['name', 'type', 'grouper'])
+    
+    # Rename columns for the editor UI to look better
+    df_config_cat = df_config_cat.rename(columns={
+        'name': 'Categoria',
+        'type': 'Tipo',
+        'grouper': 'Agrupador'
+    })
+    
+    # Reorder columns
+    cols_order = ['Categoria', 'Tipo', 'Agrupador']
+    df_config_cat = df_config_cat[[c for c in cols_order if c in df_config_cat.columns]]
     
     # Editable DataFrame con altura dinámica para evitar scroll
     h_cats = (len(df_config_cat) + 1) * 35 + 45
@@ -933,27 +913,36 @@ refresh_token = "DEJAR_VACIO_POR_AHORA"
         key="editor_categorias"
     )
     
-    if st.button("Guardar Cambios en Categorías"):
+    col_c1, col_c2 = st.columns([1, 4])
+    with col_c1:
+        save_btn = st.button("💾 Guardar Categorías", type="primary")
+    
+    if save_btn:
         if df_cat_edited.empty:
             st.error("❌ No puedes dejar la lista de categorías vacía.")
         else:
-            # NORMALIZACIÓN antes de guardar
-            df_cat_edited['Categoria'] = df_cat_edited['Categoria'].astype(str).str.strip()
-            # Save locally
-            df_cat_edited.to_csv(PATH_CAT, index=False)
-            st.success("✅ Categorías actualizadas localmente")
-            
-            # Sync to Dropbox
-            if dbx:
-                if os.path.getsize(PATH_CAT) > 0:
-                    ok, msg = dbx.upload_file(PATH_CAT, "/categorias.csv")
-                    if ok: st.toast("☁️ Categorías sincronizadas con Dropbox", icon="☁️")
-                    else: st.error(f"Error al sincronizar categorías: {msg}")
+            with st.spinner("Sincronizando categorías con Supabase..."):
+                # Transformamos para Supabase
+                data_cats = []
+                for _, row in df_cat_edited.iterrows():
+                    data_cats.append({
+                        "name": str(row['Categoria']).strip(),
+                        "type": str(row['Tipo']).strip(),
+                        "grouper": str(row.get('Agrupador', 'Sin Agrupar')).strip()
+                    })
+                
+                ok, msg = sdb.upsert("categories", data_cats, on_conflict="name")
+                if ok:
+                    st.success("✅ ¡Categorías sincronizadas con éxito!")
+                    st.cache_data.clear()
+                    st.rerun()
                 else:
-                    st.error("❌ El archivo de categorías está vacío. No se sincronizará.")
-        
-        # Clear cache to reflect changes immediately in other tabs
-        st.cache_data.clear()
-        import time
-        time.sleep(1)
-        st.rerun()
+                    st.error(f"❌ Error al guardar: {msg}")
+
+    # --- Debug Tool ---
+    with st.expander("🛠️ Modo Diagnóstico (Supabase)"):
+        st.write(f"**URL:** `{SUPABASE_URL}`")
+        if st.button("Probar Conexión Directa"):
+            res = requests.get(f"{sdb.url}/categories?select=count", headers=sdb.headers)
+            st.write(f"Status Code: {res.status_code}")
+            st.write(f"Response: {res.text}")
