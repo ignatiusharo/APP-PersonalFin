@@ -4,7 +4,6 @@ import os
 import requests
 from datetime import datetime
 import altair as alt # Importamos altair
-from utils.dropbox_client import DropboxManager
 from utils.date_utils import get_accounting_month
 
 # --- SUPABASE CONFIG ---
@@ -88,30 +87,8 @@ class SupabaseDB:
 
 sdb = SupabaseDB(SUPABASE_URL, SUPABASE_KEY)
 
-# Configuración de página
+# --- CONFIGURACIÓN GLOBAL ---
 st.set_page_config(page_title="Mi Conciliador Pro", layout="wide")
-
-# Rutas de archivos
-PATH_BANCO = "data/base_cc_santander.csv"
-PATH_CAT = "data/categorias.csv"
-PATH_PRESUPUESTO = "data/presupuesto.csv"
-
-# --- DROPBOX CONFIG ---
-if 'dropbox' in st.secrets:
-    db_config = st.secrets['dropbox']
-    if all(k in db_config for k in ['refresh_token', 'app_key', 'app_secret']) and db_config['refresh_token'] != "DEJAR_VACIO_POR_AHORA":
-        dbx = DropboxManager(
-            refresh_token=db_config['refresh_token'],
-            app_key=db_config['app_key'],
-            app_secret=db_config['app_secret']
-        )
-    else:
-        dbx = DropboxManager(access_token=db_config.get('access_token'))
-else:
-    dbx = None
-
-# Variable global para estado de red
-dbx_ok, dbx_msg = (True, "OK") if not dbx else dbx.check_connection()
 
 # --- CLOUD SYNC STATUS ---
 if "last_sync" not in st.session_state:
@@ -204,9 +181,15 @@ def cargar_datos():
     
     return df
 
-def cargar_categorias():
-    """Obtiene lista de nombres de categorías desde Supabase"""
-    df = sdb.query("categories", select="name")
+def cargar_categorias(full=False):
+    """Obtiene lista de categorías desde Supabase. Si full=True devuelve DataFrame."""
+    df = sdb.query("categories")
+    if df.empty:
+        df = pd.DataFrame(columns=['name', 'type', 'grouper'])
+    
+    if full:
+        return df.rename(columns={'name': 'Categoria', 'type': 'Tipo', 'grouper': 'Agrupador'})
+    
     if not df.empty:
         return sorted(df['name'].unique().tolist())
     return ["Alimentación", "Transporte", "Vivienda", "Ocio", "Suscripciones", "Pendiente"]
@@ -311,15 +294,8 @@ tab_home, tab_budget, tab1, tab2, tab3 = st.tabs(["🏠 Home / Resumen", "💰 P
 with tab_home:
     st.header("Resumen Financiero")
     
-    # Check de conexión Dropbox
-    if dbx and not dbx_ok:
-        if dbx_msg == "TOKEN_EXPIRED":
-            st.error("🔴 **CONEXIÓN CON DROPBOX CAÍDA**: Tu pase temporal (Token) ha caducado. Los botones de sincronización y restauración no funcionarán.")
-            st.info("👉 Ve a la pestaña **⚙️ Configuración** para renovar el Token o activar la Conexión Permanente.")
-        else:
-            st.error(f"🔴 **ERROR DE CONEXIÓN**: {dbx_msg}")
-
     df_raw = cargar_datos()
+    df_cat_map = cargar_categorias(full=True)
     df_presupuesto = cargar_presupuesto(cargar_categorias())
     
     if not df_raw.empty:
@@ -337,16 +313,12 @@ with tab_home:
                 st.session_state["last_sync"] = datetime.now().strftime("%H:%M:%S")
                 st.rerun()
             
-        # --- RESUMEN DE SALUD DE DATOS ---
         with st.expander("📊 Estado de la Base de Datos"):
             st.write(f"**Total de Registros:** {len(df_raw)}")
-            st.write(f"**Archivo Local:** `{PATH_BANCO}` ({os.path.getsize(PATH_BANCO)} bytes)")
-            
             resumen_meses = df_raw.groupby('Mes_Contable').size().reset_index(name='Registros')
             st.write("**Registros por Mes Contable:**")
             st.dataframe(resumen_meses, use_container_width=True)
             
-            # Alerta si hay datos en meses muy lejanos (posible error de parsing remanente)
             mes_actual = datetime.now().strftime('%Y-%m')
             futuros = [m for m in resumen_meses['Mes_Contable'].tolist() if m > mes_actual and m != '2026-03'] # Permitimos un mes de margen
             if futuros:
@@ -397,29 +369,7 @@ with tab_home:
             st.divider()
             
             # Preparar datos por Tipo/Orden
-            if os.path.exists(PATH_CAT):
-                try:
-                    df_cat_map = pd.read_csv(PATH_CAT, engine='python')
-                    if not df_cat_map.empty:
-                        # Buscamos columnas de forma flexible (Categoria/Categoría/etc)
-                        col_cat_name = [c for c in df_cat_map.columns if 'categor' in c.lower()]
-                        col_tipo_name = [c for c in df_cat_map.columns if 'tipo' in c.lower()]
-                        
-                        if col_cat_name and col_tipo_name:
-                            # Normalización AGRESIVA de la fuente maestro
-                            df_cat_map[col_cat_name[0]] = df_cat_map[col_cat_name[0]].astype(str).replace(r'\s+', ' ', regex=True).str.strip()
-                            # Renombramos internamente para el merge
-                            df_cat_map = df_cat_map.rename(columns={col_cat_name[0]: 'Categoria', col_tipo_name[0]: 'Tipo'})
-                            tipo_map = dict(zip(df_cat_map['Categoria'], df_cat_map['Tipo']))
-                        else:
-                            tipo_map = {}
-                    else:
-                        tipo_map = {}
-                except Exception as e:
-                    tipo_map = {}
-                    st.warning(f"⚠️ Error al mapear tipos de categorías: {e}")
-            else:
-                tipo_map = {}
+            tipo_map = dict(zip(df_cat_map['Categoria'], df_cat_map['Tipo']))
             
             # Orden de tipos: Ingresos (1), Pendientes (2), Gastos fijos (3), Gastos Variables (4)
             orden_tipos = {"Ingresos": 1, "Pendiente": 2, "Gastos fijos": 3, "Gastos Variables": 4}
@@ -553,22 +503,7 @@ with tab_home:
                 
                 st.altair_chart(chart, use_container_width=False)
     else:
-        st.warning("📊 No hay movimientos cargados en la base de datos local.")
-        if dbx:
-            st.info("💡 Puedes restaurar tus datos desde la nube ahora mismo:")
-            if st.button("📥 RESTAURAR TODO DESDE DROPBOX", type="primary"):
-                with st.spinner("Descargando base de datos maestra..."):
-                    st.cache_data.clear()
-                    ok, msg = dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
-                    if ok:
-                        dbx.download_file("/categorias.csv", PATH_CAT)
-                        dbx.download_file("/presupuesto.csv", PATH_PRESUPUESTO)
-                        st.success("✅ Base de datos restaurada correctamente.")
-                        st.rerun()
-                    else:
-                        st.error(f"❌ Falló la restauración: {msg}")
-        else:
-            st.info("Ve a la pestaña 'Cargar Cartola' para subir tus primeros movimientos.")
+        st.info("💡 No hay movimientos. Ve a la pestaña 'Cargar Cartola' para subir tus primeros datos.")
 
 with tab_budget:
     st.header("Planificación Presupuestaria")
@@ -587,13 +522,7 @@ with tab_budget:
     anio_sel = st.selectbox("📅 Filtrar por Año", anios_disponibles, index=default_index)
     
     # Obtener Tipos de Categoría para Cálculos de Saldo
-    if os.path.exists(PATH_CAT):
-        df_cat_map = pd.read_csv(PATH_CAT, engine='python')
-        # Limpieza agresiva también aquí
-        df_cat_map['Categoria'] = df_cat_map['Categoria'].astype(str).replace(r'\s+', ' ', regex=True).str.strip()
-        tipo_map = dict(zip(df_cat_map['Categoria'], df_cat_map['Tipo']))
-    else:
-        tipo_map = {}
+    tipo_map = dict(zip(df_cat_map['Categoria'], df_cat_map['Tipo']))
 
     # Filtrar columnas del DF para mostrar solo el año seleccionado + Categoria
     cols_to_show = ["Categoria"] + [c for c in cols_meses if c.startswith(str(anio_sel))]
@@ -861,50 +790,8 @@ with tab2:
                 st.rerun()
     else:
         st.info("Bandeja de entrada vacía.")
-        if dbx:
-            if st.button("🔄 Intentar Restaurar desde Dropbox"):
-                st.cache_data.clear()
-                dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
-                st.rerun()
 
 with tab3:
-    st.header("⚙️ Gestión de Categorías")
-    
-    # --- DIAGNÓSTICO DE ROBUSTEZ (Dropbox) ---
-    if 'dropbox' in st.secrets:
-        db_conf = st.secrets['dropbox']
-        # Verificamos si tiene la configuración robusta (Refresh Token)
-        es_permanente = all(k in db_conf for k in ['refresh_token', 'app_key', 'app_secret'])
-        
-        if es_permanente:
-            st.success("✔️ **Conexión Robusta Activada**: Dropbox se renovará solo para siempre.")
-        else:
-            st.warning("⚠️ **Conexión Frágil**: Estás usando un pase temporal.")
-            
-            # Usar llaves proporcionadas por el usuario para facilitar el proceso
-            ak = db_conf.get('app_key', 'y7ucm69p0q2g3zx')
-            as_ = db_conf.get('app_secret', 'glmw7cg29obx2vo')
-            
-            with st.expander("🛡️ PASO 1: Configurar Credenciales Maestro (Solo una vez)", expanded=not (ak != 'TU_APP_KEY' and as_ != 'TU_APP_SECRET')):
-                if db_conf.get('app_key') == 'TU_APP_KEY_AQUI' or not db_conf.get('app_key'):
-                    st.error("❗ **Faltan las llaves maestro en tus Secretos de Streamlit.**")
-                    st.write("Copia y pega esto en tus Secretos (reemplazando con tus datos de Dropbox):")
-                    st.code(f"""
-[dropbox]
-app_key = "{ak}"
-app_secret = "{as_}"
-refresh_token = "DEJAR_VACIO_POR_AHORA"
-                    """, language="toml")
-                    st.info("💡 Obtén estas llaves en la pestaña 'Settings' de tu app en el [Dropbox App Console](https://www.dropbox.com/developers/apps).")
-                else:
-                    st.success("✅ Llaves maestro detectadas. Procede a generar el código:")
-                    st.markdown(f"""
-                    1. **Generar Código**: Haz clic en [este enlace](https://www.dropbox.com/oauth2/authorize?client_id={ak}&token_access_type=offline&response_type=code) y copia el código que te den.
-                    2. **Obtener Llave Permanente**: Pásame el código por el chat y yo generaré la llave por ti.
-                    3. **Guardar**: El `refresh_token` que te daré, agrégalo a tus secretos y listo.
-                    """)
-    
-    st.divider()
     st.write("Aquí puedes agregar, editar o eliminar las categorías disponibles.")
     
     # Load categories from Supabase
