@@ -103,10 +103,19 @@ def normalizar_dataframe_import(df):
 def cargar_datos():
     cols_base = ['Fecha', 'Detalle', 'Monto', 'Banco', 'Categoria']
     if os.path.exists(PATH_BANCO):
+        # PROTECCIÓN: Si el archivo mide 0 bytes, es una descarga fallida anterior
+        if os.path.getsize(PATH_BANCO) == 0:
+            st.warning("⚠️ El archivo de datos está vacío (0 bytes).")
+            # Si hay Dropbox disponible, intentamos restauración automática silenciosa
+            if dbx:
+                dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
+        
         try:
             df = pd.read_csv(PATH_BANCO)
-            if not df.empty:
-                # Normalización ROBUSTA de Monto
+            if df.empty:
+                return pd.DataFrame(columns=cols_base)
+            
+            # Normalización ROBUSTA de Monto
                 if df['Monto'].dtype == object:
                     df['Monto'] = df['Monto'].astype(str).str.replace('$', '', regex=False).str.replace('.', '', regex=False).str.replace(',', '.', regex=False).str.replace('\xa0', '', regex=False).str.strip()
                 df['Monto'] = pd.to_numeric(df['Monto'], errors='coerce').fillna(0)
@@ -129,7 +138,7 @@ def cargar_datos():
                 
                 return df
         except (pd.errors.EmptyDataError, pd.errors.ParserError):
-            st.warning("⚠️ El archivo de movimientos está vacío o corrupto.")
+            st.error("⚠️ El archivo de movimientos está corrupto o vacío.")
             return pd.DataFrame(columns=cols_base)
         except Exception as e:
             st.error(f"Error cargando datos: {str(e)}")
@@ -819,6 +828,11 @@ with tab2:
             st.rerun()
     else:
         st.info("Bandeja de entrada vacía.")
+        if dbx:
+            if st.button("🔄 Intentar Restaurar desde Dropbox"):
+                st.cache_data.clear()
+                dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
+                st.rerun()
 
 with tab3:
     st.header("⚙️ Gestión de Categorías")

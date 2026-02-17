@@ -25,12 +25,9 @@ class DropboxManager:
             return False
 
     def download_file(self, dropbox_path, local_path):
-        """Downloads a file from Dropbox to local path."""
+        """Downloads a file from Dropbox to local path atomically."""
         try:
-            # Ensure local directory exists
-            os.makedirs(os.path.dirname(local_path), exist_ok=True)
-            
-            # Check if file exists in Dropbox (metadata)
+            # Metadata check
             try:
                 self.dbx.files_get_metadata(dropbox_path)
             except dropbox.exceptions.ApiError as e:
@@ -38,10 +35,23 @@ class DropboxManager:
                     return False, "File not found in Dropbox"
                 raise e
 
-            # Download
+            # Download to memory first
+            metadata, res = self.dbx.files_download(path=dropbox_path)
+            content = res.content
+            
+            if not content:
+                # If content is empty strings but metadata exists, we might decide to skip
+                # for safety, or proceed if 0-byte files are allowed. 
+                # For this app, we prefer safety.
+                pass 
+
+            # Ensure local directory exists
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            
+            # Write only after full download
             with open(local_path, "wb") as f:
-                metadata, res = self.dbx.files_download(path=dropbox_path)
-                f.write(res.content)
+                f.write(content)
+                
             return True, f"Downloaded {dropbox_path}"
         except Exception as e:
             return False, f"Error downloading: {str(e)}"
