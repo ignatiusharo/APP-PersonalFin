@@ -288,15 +288,19 @@ def highlight_duplicates(df):
 
 # --- INTERFAZ ---
 st.title("💰 Conciliador Bancario Inteligente")
+st.caption("v2.2.1 - Cloud Native (Pure Supabase)")
+
+# Cargar Datos y Categorías Globalmente para todas las pestañas
+df_raw = cargar_datos()
+df_cat_map = cargar_categorias(full=True)
+df_presupuesto = cargar_presupuesto(cargar_categorias())
 
 tab_home, tab_budget, tab1, tab2, tab3 = st.tabs(["🏠 Home / Resumen", "💰 Presupuesto", "📥 Cargar Cartola", "📊 Conciliación y Categorías", "⚙️ Configuración"])
 
 with tab_home:
     st.header("Resumen Financiero")
     
-    df_raw = cargar_datos()
-    df_cat_map = cargar_categorias(full=True)
-    df_presupuesto = cargar_presupuesto(cargar_categorias())
+    # Ya definidos globalmente: df_raw, df_cat_map, df_presupuesto
     
     if not df_raw.empty:
         # Mes Contable (Ya tenemos Fecha_dt desde cargar_datos)
