@@ -543,7 +543,19 @@ with tab_home:
                 
                 st.altair_chart(chart, use_container_width=False)
     else:
-        st.info("No hay datos cargados aún.")
+        st.warning("📊 No hay movimientos cargados en la base de datos local.")
+        if dbx:
+            st.info("💡 Puedes restaurar tus datos desde la nube ahora mismo:")
+            if st.button("📥 RESTAURAR TODO DESDE DROPBOX", type="primary"):
+                with st.spinner("Descargando base de datos maestra..."):
+                    st.cache_data.clear()
+                    dbx.download_file("/base_cc_santander.csv", PATH_BANCO)
+                    dbx.download_file("/categorias.csv", PATH_CAT)
+                    dbx.download_file("/presupuesto.csv", PATH_PRESUPUESTO)
+                    st.success("✅ Base de datos restaurada correctamente.")
+                    st.rerun()
+        else:
+            st.info("Ve a la pestaña 'Cargar Cartola' para subir tus primeros movimientos.")
 
 with tab_budget:
     st.header("Planificación Presupuestaria")
@@ -798,31 +810,41 @@ with tab2:
         )
         
         if st.button("💾 Guardar Cambios Finales", type="primary"):
-            # Normalización antes de guardar: Categorías y estandarización de FECHA
-            df_editado['Categoria'] = df_editado['Categoria'].astype(str).str.strip()
-            
-            # Actualizamos el dataframe original
-            df_cat.update(df_editado)
-            
-            if df_cat.empty:
-                st.error("❌ No hay datos para guardar.")
+            # SAFEGUARD 1: No permitir guardar si df_editado tiene datos pero df_cat está vacío por error de carga
+            if df_cat.empty and not df_editado.empty:
+                st.error("❌ ERROR CRÍTICO: El motor de datos se cargó vacío. No se guardará para evitar pérdida de datos. Usa 'Restaurar de Dropbox'.")
             else:
-                # NORMALIZACIÓN FINAL ANTES DE ESCRIBIR EL CSV (Asegurar DD-MM-YYYY)
-                df_cat = normalizar_dataframe_import(df_cat)
+                # Normalización antes de guardar: Categorías y estandarización de FECHA
+                df_editado['Categoria'] = df_editado['Categoria'].astype(str).str.strip()
                 
-                # Guardamos localmente
-                df_cat.to_csv(PATH_BANCO, index=False)
-                st.success("✅ Cambios guardados localmente y datos normalizados.")
+                # Actualizamos el dataframe original
+                df_cat.update(df_editado)
                 
-                # Auto Backup - Upload a Dropbox
-                if dbx:
-                    if os.path.getsize(PATH_BANCO) > 0:
-                        with st.spinner("Subiendo respaldo a Dropbox..."):
-                            ok, msg = dbx.upload_file(PATH_BANCO, "/base_cc_santander.csv")
-                            if ok: st.toast("☁️ Respaldo en Dropbox actualizado", icon="☁️")
-                            else: st.error(f"Error respaldo: {msg}")
-                    else:
-                        st.error("❌ Archivo local vacío. No se subirá a Dropbox.")
+                if df_cat.empty:
+                    st.error("❌ No hay datos para guardar.")
+                else:
+                    # NORMALIZACIÓN FINAL ANTES DE ESCRIBIR EL CSV (Asegurar DD-MM-YYYY)
+                    df_cat = normalizar_dataframe_import(df_cat)
+                    
+                    # ATOMIC PERSISTENCE: Crear backup antes de sobrescribir
+                    if os.path.exists(PATH_BANCO):
+                        import shutil
+                        shutil.copy2(PATH_BANCO, PATH_BANCO + ".bak")
+                    
+                    # Guardamos localmente
+                    df_cat.to_csv(PATH_BANCO, index=False)
+                    st.success("✅ Cambios guardados localmente y datos normalizados.")
+                    
+                    # Auto Backup - Upload a Dropbox
+                    if dbx:
+                        # SAFEGUARD 2: No subir a Dropbox si bajó drásticamente el peso del archivo (posible error)
+                        if os.path.getsize(PATH_BANCO) > 50: 
+                            with st.spinner("Subiendo respaldo a Dropbox..."):
+                                ok, msg = dbx.upload_file(PATH_BANCO, "/base_cc_santander.csv")
+                                if ok: st.toast("☁️ Respaldo en Dropbox actualizado", icon="☁️")
+                                else: st.error(f"Error respaldo: {msg}")
+                        else:
+                            st.error("❌ El archivo local es demasiado pequeño. Sincronización con Dropbox abortada por seguridad.")
             
             st.cache_data.clear()
             st.rerun()

@@ -57,10 +57,14 @@ class DropboxManager:
             return False, f"Error downloading: {str(e)}"
 
     def upload_file(self, local_path, dropbox_path):
-        """Uploads a local file to Dropbox, overwriting if exists."""
+        """Uploads a local file to Dropbox, overwriting if exists, with safety checks."""
         try:
             if not os.path.exists(local_path):
                 return False, "Local file does not exist"
+            
+            # SAFEGUARD: Do not upload if file is tiny (likely header-only or corrupted)
+            if os.path.getsize(local_path) < 50:
+                return False, f"File too small ({os.path.getsize(local_path)} bytes). Upload aborted for safety."
 
             with open(local_path, "rb") as f:
                 self.dbx.files_upload(
