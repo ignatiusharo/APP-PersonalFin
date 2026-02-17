@@ -19,10 +19,11 @@ class DropboxManager:
     def check_connection(self):
         try:
             self.dbx.users_get_current_account()
-            return True
+            return True, "OK"
+        except dropbox.exceptions.AuthError:
+            return False, "TOKEN_EXPIRED"
         except Exception as e:
-            print(f"Error connecting to Dropbox: {e}")
-            return False
+            return False, str(e)
 
     def download_file(self, dropbox_path, local_path):
         """Downloads a file from Dropbox to local path atomically."""

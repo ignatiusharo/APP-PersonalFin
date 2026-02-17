@@ -15,11 +15,9 @@ PATH_CAT = "data/categorias.csv"
 PATH_PRESUPUESTO = "data/presupuesto.csv"
 
 # --- DROPBOX CONFIG ---
-# --- DROPBOX CONFIG ---
 if 'dropbox' in st.secrets:
     db_config = st.secrets['dropbox']
-    # Priorizar flujo de refresh_token si están disponibles las llaves
-    if all(k in db_config for k in ['refresh_token', 'app_key', 'app_secret']):
+    if all(k in db_config for k in ['refresh_token', 'app_key', 'app_secret']) and db_config['refresh_token'] != "DEJAR_VACIO_POR_AHORA":
         dbx = DropboxManager(
             refresh_token=db_config['refresh_token'],
             app_key=db_config['app_key'],
@@ -29,6 +27,9 @@ if 'dropbox' in st.secrets:
         dbx = DropboxManager(access_token=db_config.get('access_token'))
 else:
     dbx = None
+
+# Variable global para estado de red
+dbx_ok, dbx_msg = (True, "OK") if not dbx else dbx.check_connection()
 
 # --- AUTO SYNC GLOBAL (Al inicio) ---
 if dbx and "last_sync" not in st.session_state:
@@ -304,6 +305,15 @@ tab_home, tab_budget, tab1, tab2, tab3 = st.tabs(["🏠 Home / Resumen", "💰 P
 
 with tab_home:
     st.header("Resumen Financiero")
+    
+    # Check de conexión Dropbox
+    if dbx and not dbx_ok:
+        if dbx_msg == "TOKEN_EXPIRED":
+            st.error("🔴 **CONEXIÓN CON DROPBOX CAÍDA**: Tu pase temporal (Token) ha caducado. Los botones de sincronización y restauración no funcionarán.")
+            st.info("👉 Ve a la pestaña **⚙️ Configuración** para renovar el Token o activar la Conexión Permanente.")
+        else:
+            st.error(f"🔴 **ERROR DE CONEXIÓN**: {dbx_msg}")
+
     df_raw = cargar_datos()
     df_presupuesto = cargar_presupuesto(cargar_categorias())
     
