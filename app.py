@@ -751,18 +751,23 @@ with tab2:
             st.warning("⚠️ Se han detectado posibles movimientos duplicados en esta vista.")
 
         # Editor de datos - El índice se mantiene para poder actualizar el original
-        # Removemos columnas técnicas del editor
-        df_editor_input = df_display.drop(columns=['Duplicado', 'Mes_Contable', 'Fecha_dt'])
+        # Seleccionamos y renombramos columnas para una vista profesional
+        cols_mostrar = ['id', 'Fecha', 'period', 'Detalle', 'Monto', 'Banco', 'Categoria']
+        df_editor_input = df_display[cols_mostrar].copy()
         
         df_editado = st.data_editor(
             df_editor_input,
             column_config={
+                "id": st.column_config.NumberColumn("ID", disabled=True),
+                "Fecha": st.column_config.TextColumn("Fecha"),
+                "period": st.column_config.TextColumn("Mes Contable", disabled=True),
+                "Detalle": st.column_config.TextColumn("Descripción"),
+                "Monto": st.column_config.NumberColumn("Monto", format="$%d"),
+                "Banco": st.column_config.TextColumn("Banco", disabled=True),
                 "Categoria": st.column_config.SelectboxColumn("Categoría", options=lista_categorias, required=True),
-                "Monto": st.column_config.NumberColumn(format="$%d"),
-                "Fecha": st.column_config.TextColumn("Fecha") # Mantenemos texto para evitar líos de formato al guardar
             },
             num_rows="dynamic",
-            hide_index=False, # Importante: el índice nos permite mapear de vuelta a df_cat
+            hide_index=True, 
             use_container_width=True,
             key="conciliacion_editor"
         )
