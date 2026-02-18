@@ -64,12 +64,13 @@ class SupabaseDB:
             st.error(f"Supabase Connection Fatal Error: {str(e)}")
             return pd.DataFrame()
 
-    def upsert(self, table, data, on_conflict="name"):
+    def upsert(self, table, data, on_conflict="id"):
         headers = self.headers.copy()
-        headers["Prefer"] = f"return=representation,resolution=merge-duplicates"
+        headers["Prefer"] = "return=representation,resolution=merge-duplicates"
+        url = f"{self.url}/{table}?on_conflict={on_conflict}"
         try:
-            res = requests.post(f"{self.url}/{table}", json=data, headers=headers)
-            return res.status_code in [200, 201], res.text
+            res = requests.post(url, json=data, headers=headers)
+            return res.status_code in [200, 201, 204], res.text
         except Exception as e:
             return False, str(e)
 
@@ -293,7 +294,7 @@ def highlight_duplicates(df):
 
 # --- INTERFAZ ---
 st.title("💰 Conciliador Bancario Inteligente")
-st.caption("v2.2.3 - Cloud Native (Final Fix)")
+st.caption("v2.2.5 - Cloud Native (Robust Sync)")
 
 # Intentar cargar datos reales (Sobrescribe las inicializaciones si hay éxito)
 try:
@@ -810,67 +811,68 @@ with tab2:
         st.info("Bandeja de entrada vacía.")
 
 with tab3:
-    st.write("Aquí puedes agregar, editar o eliminar las categorías disponibles.")
+    st.header("⚙️ Gestión de Categorías")
+    st.write("Agrega, edita o elimina las categorías de tu presupuesto. Los cambios se sincronizarán con la nube.")
     
-    # Load categories from Supabase
-    with st.spinner("Cargando categorías..."):
-        df_config_cat = sdb.query("categories")
+    # Cargar categorías incluyendo el ID para actualizaciones estables
+    with st.spinner("Leyendo base de datos..."):
+        df_config = sdb.query("categories")
     
-    if df_config_cat.empty:
-        st.info("💡 No se detectaron categorías en la base de datos. Puedes agregar la primera fila abajo.")
-        df_config_cat = pd.DataFrame(columns=['name', 'type', 'grouper'])
+    if df_config.empty:
+        df_config = pd.DataFrame(columns=['id', 'name', 'type', 'grouper'])
     
-    # Rename columns for the editor UI to look better
-    df_config_cat = df_config_cat.rename(columns={
-        'name': 'Categoria',
+    # Editor de Datos Limpio
+    # Renombramos solo para la vista
+    df_config_view = df_config.rename(columns={
+        'id': 'ID',
+        'name': 'Nombre',
         'type': 'Tipo',
         'grouper': 'Agrupador'
     })
     
-    # Reorder columns
-    cols_order = ['Categoria', 'Tipo', 'Agrupador']
-    df_config_cat = df_config_cat[[c for c in cols_order if c in df_config_cat.columns]]
-    
-    # Editable DataFrame con altura dinámica para evitar scroll
-    h_cats = (len(df_config_cat) + 1) * 35 + 45
-    df_cat_edited = st.data_editor(
-        df_config_cat,
+    # Columnas a editar
+    df_editor = st.data_editor(
+        df_config_view,
         num_rows="dynamic",
         use_container_width=True,
-        height=h_cats,
-        key="editor_categorias"
+        column_config={
+            "ID": st.column_config.NumberColumn("ID", disabled=True),
+            "Nombre": st.column_config.TextColumn("Categoría", required=True),
+            "Tipo": st.column_config.SelectboxColumn("Tipo", options=["Ingresos", "Gastos fijos", "Gastos Variables", "Pendiente"], required=True),
+            "Agrupador": st.column_config.TextColumn("Agrupador (Opcional)")
+        },
+        hide_index=True,
+        key="config_categories_editor"
     )
     
-    col_c1, col_c2 = st.columns([1, 4])
-    with col_c1:
-        save_btn = st.button("💾 Guardar Categorías", type="primary")
-    
-    if save_btn:
-        if df_cat_edited.empty:
-            st.error("❌ No puedes dejar la lista de categorías vacía.")
-        else:
-            with st.spinner("Sincronizando categorías con Supabase..."):
-                # Transformamos para Supabase
-                data_cats = []
-                for _, row in df_cat_edited.iterrows():
-                    data_cats.append({
-                        "name": str(row['Categoria']).strip(),
-                        "type": str(row['Tipo']).strip(),
-                        "grouper": str(row.get('Agrupador', 'Sin Agrupar')).strip()
-                    })
+    if st.button("💾 Aplicar Cambios en Categorías", type="primary"):
+        with st.spinner("Guardando en Supabase..."):
+            # 1. Detectar Deleted Rows no es trivial con el editor de streamlit si no usamos el state
+            # Pero podemos hacer un enfoque de sincronización total o manejar los cambios.
+            # Lo más robusto para este caso: Upsert de lo que hay en la tabla.
+            
+            data_to_sync = []
+            for _, row in df_editor.iterrows():
+                # Limpiar y preparar
+                payload = {
+                    "name": str(row['Nombre']).strip(),
+                    "type": str(row['Tipo']).strip(),
+                    "grouper": str(row.get('Agrupador', 'Sin Agrupar')).strip()
+                }
+                # Si tiene ID, lo incluimos para que sea un UPDATE por ID (más seguro que por nombre)
+                if not pd.isna(row.get('ID')):
+                    payload['id'] = int(row['ID'])
                 
-                ok, msg = sdb.upsert("categories", data_cats, on_conflict="name")
+                data_to_sync.append(payload)
+            
+            if data_to_sync:
+                # Usamos upsert. Al enviar el ID, Supabase sabe que debe actualizar ese registro exacto.
+                # Si no tiene ID, lo crea nuevo.
+                # on_conflict="id" es más robusto si ya tenemos IDs.
+                ok, msg = sdb.upsert("categories", data_to_sync, on_conflict="id")
                 if ok:
-                    st.success("✅ ¡Categorías sincronizadas con éxito!")
+                    st.success("✅ Categorías actualizadas correctamente.")
                     st.cache_data.clear()
                     st.rerun()
                 else:
                     st.error(f"❌ Error al guardar: {msg}")
-
-    # --- Debug Tool ---
-    with st.expander("🛠️ Modo Diagnóstico (Supabase)"):
-        st.write(f"**URL:** `{SUPABASE_URL}`")
-        if st.button("Probar Conexión Directa"):
-            res = requests.get(f"{sdb.url}/categories?select=count", headers=sdb.headers)
-            st.write(f"Status Code: {res.status_code}")
-            st.write(f"Response: {res.text}")
